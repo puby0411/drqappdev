@@ -1161,10 +1161,6 @@ function App() {
   // after 2 consecutive same-gender rounds. When off, it never forces mixed —
   // gender composition is left entirely to whatever combo scores best.
   const [forceMixedEnabled, setForceMixedEnabled] = useState(true);
-  // When true, pairing/opponent freshness is checked BEFORE wait-time priority
-  // in match selection (all modes). Default false preserves original behavior
-  // where wait time is protected first and freshness only breaks ties.
-  const [prioritizeFreshness, setPrioritizeFreshness] = useState(false);
   const [queue, setQueue] = useState(() => loadLiveState()?.queue ?? INIT_PLAYERS);
   const [courts, setCourts] = useState(() => {
     const saved = loadLiveState();
@@ -2439,11 +2435,7 @@ renderCourts();
         const c = candidates[ci];
         const wait = worstQposIds(c.ids);
         const s = scoreMatch(c.teamA, c.teamB);
-        // When prioritizeFreshness is on, freshness (s) is compared first and
-        // wait position only breaks ties. Otherwise wait position is checked
-        // first as originally designed.
-        const better = prioritizeFreshness ? s < bestScore || s === bestScore && wait < bestWait : wait < bestWait || wait === bestWait && s < bestScore;
-        if (better) {
+        if (wait < bestWait || wait === bestWait && s < bestScore) {
           best = c;
           bestWait = wait;
           bestScore = s;
@@ -2500,7 +2492,7 @@ renderCourts();
           });
         }
         if (!candidates.length) return null;
-        candidates.sort((x, y) => y.genderOk - x.genderOk || x.wantedGender - y.wantedGender || x.levelBal - y.levelBal || (prioritizeFreshness ? (x.fresh - y.fresh) || (x.waitScore - y.waitScore) : (x.waitScore - y.waitScore) || (x.fresh - y.fresh)));
+        candidates.sort((x, y) => y.genderOk - x.genderOk || x.wantedGender - y.wantedGender || x.levelBal - y.levelBal || x.waitScore - y.waitScore || x.fresh - y.fresh);
         return candidates[0];
       };
       const combos = [];
@@ -2509,7 +2501,7 @@ renderCourts();
         if (c) combos.push(c);
       }
       if (!combos.length) return null;
-      combos.sort((x, y) => y.genderOk - x.genderOk || x.wantedGender - y.wantedGender || x.levelBal - y.levelBal || (prioritizeFreshness ? (x.fresh - y.fresh) || (x.waitScore - y.waitScore) : (x.waitScore - y.waitScore) || (x.fresh - y.fresh)));
+      combos.sort((x, y) => y.genderOk - x.genderOk || x.wantedGender - y.wantedGender || x.levelBal - y.levelBal || x.waitScore - y.waitScore || x.fresh - y.fresh);
       return combos[0];
     }
 
@@ -3836,31 +3828,7 @@ renderCourts();
       height: 13,
       cursor: 'pointer'
     }
-  }), forceMixedEnabled ? "🔀 Forced Mixed Rotation" : "🔀 Mixed Rotation Off")), /*#__PURE__*/React.createElement("div", {
-    className: "ctrl-group"
-  }, /*#__PURE__*/React.createElement("label", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 5,
-      cursor: 'pointer',
-      fontSize: 11,
-      fontWeight: 600,
-      color: prioritizeFreshness ? 'var(--orange)' : 'var(--text-muted)',
-      whiteSpace: 'nowrap'
-    },
-    title: prioritizeFreshness ? "Freshness (new partner/opponent combos) is checked BEFORE wait time in every mode. Someone who's waited longest may occasionally be skipped in favor of a fresher match." : "Wait time is protected first in every mode — freshness only breaks ties between otherwise-equal matches."
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    checked: prioritizeFreshness,
-    onChange: e => setPrioritizeFreshness(e.target.checked),
-    style: {
-      accentColor: 'var(--orange)',
-      width: 13,
-      height: 13,
-      cursor: 'pointer'
-    }
-  }), prioritizeFreshness ? "🔄 Freshness Priority" : "⏱ Wait Priority")), /*#__PURE__*/React.createElement("button", {
+  }), forceMixedEnabled ? "🔀 Forced Mixed Rotation" : "🔀 Mixed Rotation Off")), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-green btn-sm",
     style: {
       marginLeft: 'auto'
