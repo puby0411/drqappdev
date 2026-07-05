@@ -2095,7 +2095,13 @@ window.addEventListener('message', (e) => {
           return '<div class="rank-row"><div class="rank-num ' + cls + '">' + (i + 1) + '</div><div class="rank-name">' + p.name + '</div><div class="rank-wins">' + p.wins + ' win' + (p.wins === 1 ? '' : 's') + '</div></div>';
         }).join('');
       }
-      document.getElementById('ranklist-overlay').classList.add('visible');
+      // e.data.show === false means this is a background refresh (e.g. a new
+      // game just finished) rather than the user explicitly clicking "Send
+      // Rank List". In that case only update the numbers already on screen —
+      // don't pop the overlay open if the user had closed it.
+      if (e.data.show !== false) {
+        document.getElementById('ranklist-overlay').classList.add('visible');
+      }
     } catch(err) {}
   }
 });
@@ -3574,6 +3580,21 @@ renderCourts();
     });
     showNotif('Rank List sent to preview screen!');
   };
+  // Keep an already-open Rank List overlay live: whenever a game is recorded
+  // (history changes), silently push the refreshed tally. show:false tells
+  // the preview window to update the numbers in place without re-opening
+  // the overlay if the user had closed it.
+  useEffect(() => {
+    if (previewWinRef.current && !previewWinRef.current.closed) {
+      try {
+        previewWinRef.current.postMessage({
+          type: 'DR_RANK_LIST',
+          rankedPlayers,
+          show: false
+        }, '*');
+      } catch (e) {}
+    }
+  }, [history]);
   return /*#__PURE__*/React.createElement("div", {
     className: "app"
   }, notification && /*#__PURE__*/React.createElement("div", {
