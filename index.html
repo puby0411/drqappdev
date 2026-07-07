@@ -673,8 +673,8 @@ function PlayerListTab({
   setQueue,
   courts,
   showNotif,
-  exportWaitlistXLSX,
-  importWaitlistXLSX,
+  exportPlayerListXLSX,
+  importPlayerListXLSX,
   addingPair,
   setAddingPair,
   newName,
@@ -726,9 +726,26 @@ function PlayerListTab({
   };
   const saveEdit = id => {
     if (!plEditName.trim()) return;
+    const onCourtNow = courts.some(c => c.players && [...c.players.teamA, ...c.players.teamB].some(x => x.id === id));
+    if (onCourtNow) {
+      setPlEditId(null);
+      showNotif('Cannot edit — player is currently in a game. Wait until their game ends.');
+      return;
+    }
+    const trimmed = plEditName.trim();
     setPlayerList(prev => prev.map(p => p.id === id ? {
       ...p,
-      name: plEditName.trim(),
+      name: trimmed,
+      level: plEditLevel,
+      gender: plEditGender
+    } : p));
+    // Player List is the single place edits are made — propagate the same
+    // change into the live Waitlist entry (if this player is queued).
+    // (Court propagation isn't needed: saveEdit refuses to run at all while
+    // the player is on a court — see the onCourtNow guard above.)
+    setQueue(prev => prev.map(p => p.id === id ? {
+      ...p,
+      name: trimmed,
       level: plEditLevel,
       gender: plEditGender
     } : p));
@@ -760,19 +777,19 @@ function PlayerListTab({
     }
   }, /*#__PURE__*/React.createElement("button", {
     className: "btn btn-ghost btn-sm",
-    onClick: exportWaitlistXLSX,
-    disabled: queue.length === 0,
-    title: "Export waitlist to Excel",
+    onClick: exportPlayerListXLSX,
+    disabled: playerList.length === 0,
+    title: "Export player list to Excel",
     style: {
       display: 'flex',
       alignItems: 'center',
       gap: 4,
       border: '1px solid var(--green)',
       color: 'var(--green)',
-      opacity: queue.length === 0 ? 0.4 : 1
+      opacity: playerList.length === 0 ? 0.4 : 1
     }
   }, "⬇ Excel"), /*#__PURE__*/React.createElement("label", {
-    title: "Load players from Excel (.xlsx)",
+    title: "Load players into Player List and Waitlist from Excel (.xlsx)",
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -789,7 +806,7 @@ function PlayerListTab({
   }, "⬆ Load", /*#__PURE__*/React.createElement("input", {
     type: "file",
     accept: ".xlsx,.xls",
-    onChange: importWaitlistXLSX,
+    onChange: importPlayerListXLSX,
     style: {
       display: 'none'
     }
@@ -903,13 +920,22 @@ function PlayerListTab({
       title: "Add to today's waitlist"
     }, "+ Waitlist"), /*#__PURE__*/React.createElement("button", {
       className: "btn btn-ghost btn-sm",
+      disabled: onCourt,
+      style: onCourt ? {
+        opacity: 0.35,
+        cursor: 'not-allowed'
+      } : undefined,
       onClick: () => {
+        if (onCourt) {
+          showNotif('Cannot edit — player is currently in a game. Wait until their game ends.');
+          return;
+        }
         setPlEditId(p.id);
         setPlEditName(p.name);
         setPlEditLevel(p.level);
         setPlEditGender(p.gender);
       },
-      title: "Edit"
+      title: onCourt ? 'Cannot edit while player is in a game' : 'Edit'
     }, "✏️"), /*#__PURE__*/React.createElement("button", {
       className: "btn btn-ghost btn-sm",
       style: {
@@ -1219,12 +1245,9 @@ function App() {
   const [manualSearch, setManualSearch] = useState('');
   const [reqSearch, setReqSearch] = useState('');
   const [pairSearch, setPairSearch] = useState('');
-  const [editingPlayerId, setEditingPlayerId] = useState(null);
   const [rearrangeCourt, setRearrangeCourt] = useState(null); // courtId being rearranged
   const [dragPlayerId, setDragPlayerId] = useState(null); // id of player being dragged
   const [replacingPlayer, setReplacingPlayer] = useState(null); // { courtId, playerId } — sub-out mode
-  const [editingPlayerName, setEditingPlayerName] = useState('');
-  const [editingPlayerLevel, setEditingPlayerLevel] = useState('Open');
   const [simModal, setSimModal] = useState(false);
   const [simGames, setSimGames] = useState('96');
   const [simRunning, setSimRunning] = useState(false);
@@ -1278,23 +1301,45 @@ function App() {
   };
 
   // ── Pairing history (partner + opponent repeat avoidance) ────────────
-  // Flat map: "idA|idB" (sorted) → number of times they shared a court.
-  // Incremented when a game is recorded. Used to score candidate matches
-  // so the algorithm prefers combos where players haven't faced/partnered before.
-  const pairingHistory = useRef({}); // { "id1|id2": count, ... }
+  // Two separate flat maps: "idA|idB" (sorted) → count. Kept as SEPARATE
+  // maps rather than one shared map, because a pair can be partners in one
+  // game and opponents in another — a single shared counter can't tell
+  // those roles apart, which caused the partner-repeat badge to show a
+  // count for pairs who had only ever been OPPONENTS, never partners.
+  const partnerHistory = useRef({}); // { "id1|id2": count of times partnered }
+  const opponentHistory = useRef({}); // { "id1|id2": count of times opposed }
 
   const phKey = (a, b) => [a, b].sort().join('|');
-  const phGet = (a, b) => pairingHistory.current[phKey(a, b)] || 0;
+  const partnerGet = (a, b) => partnerHistory.current[phKey(a, b)] || 0;
+  const opponentGet = (a, b) => opponentHistory.current[phKey(a, b)] || 0;
+
+  // ── Group history (exact-foursome repeat avoidance) ───────────────────
+  // Flat map: sorted 4-id key → number of times these exact 4 players have
+  // shared a court together, REGARDLESS of how the teams were split.
+  // Pairwise history above can't see "same 4, different split" as a
+  // repeat — this closes that gap. Scored, not filtered, so a valid match
+  // is still always returned even if it means reusing a group.
+  const groupHistory = useRef({}); // { "id1|id2|id3|id4": count, ... }
+  const ghKey = ids => [...ids].sort().join('|');
+  const ghGet = ids => groupHistory.current[ghKey(ids)] || 0;
+
   const phRecord = (teamA, teamB) => {
-    const bump = (a, b) => {
+    const bumpPartner = (a, b) => {
       const k = phKey(a, b);
-      pairingHistory.current[k] = (pairingHistory.current[k] || 0) + 1;
+      partnerHistory.current[k] = (partnerHistory.current[k] || 0) + 1;
+    };
+    const bumpOpponent = (a, b) => {
+      const k = phKey(a, b);
+      opponentHistory.current[k] = (opponentHistory.current[k] || 0) + 1;
     };
     // Partners
-    if (teamA[0] && teamA[1]) bump(teamA[0].id, teamA[1].id);
-    if (teamB[0] && teamB[1]) bump(teamB[0].id, teamB[1].id);
+    if (teamA[0] && teamA[1]) bumpPartner(teamA[0].id, teamA[1].id);
+    if (teamB[0] && teamB[1]) bumpPartner(teamB[0].id, teamB[1].id);
     // Opponents (all cross-team pairs)
-    for (const pA of teamA) for (const pB of teamB) bump(pA.id, pB.id);
+    for (const pA of teamA) for (const pB of teamB) bumpOpponent(pA.id, pB.id);
+    // Exact foursome, regardless of split
+    const gk = ghKey([...teamA, ...teamB].map(p => p.id));
+    groupHistory.current[gk] = (groupHistory.current[gk] || 0) + 1;
   };
 
   // (lastPlayedTime removed — time-based cooldowns must not affect matchmaking)
@@ -1312,7 +1357,9 @@ function App() {
   // matchmaking freshness scoring stays accurate after a page refresh.
   useEffect(() => {
     if (history && history.length) {
-      pairingHistory.current = {};
+      partnerHistory.current = {};
+      opponentHistory.current = {};
+      groupHistory.current = {};
       gamesPlayedRef.current = {};
       joinRoundRef.current = {};
       roundsFiredRef.current = 0;
@@ -1353,13 +1400,13 @@ function App() {
   // normally, so the algorithm still tries to give them new opponents.
   const isFixedPair = (p0, p1) => p0?.partnerId === p1?.id || p1?.partnerId === p0?.id;
   const scoreMatch = (teamA, teamB) => {
-    const pairs = [...(isFixedPair(teamA[0], teamA[1]) ? [] : [phGet(teamA[0].id, teamA[1].id)]),
+    const pairs = [...(isFixedPair(teamA[0], teamA[1]) ? [] : [partnerGet(teamA[0].id, teamA[1].id)]),
     // partner A (skipped if fixed)
-    ...(isFixedPair(teamB[0], teamB[1]) ? [] : [phGet(teamB[0].id, teamB[1].id)]),
+    ...(isFixedPair(teamB[0], teamB[1]) ? [] : [partnerGet(teamB[0].id, teamB[1].id)]),
     // partner B (skipped if fixed)
-    phGet(teamA[0].id, teamB[0].id),
+    opponentGet(teamA[0].id, teamB[0].id),
     // opponents
-    phGet(teamA[0].id, teamB[1].id), phGet(teamA[1].id, teamB[0].id), phGet(teamA[1].id, teamB[1].id)];
+    opponentGet(teamA[0].id, teamB[1].id), opponentGet(teamA[1].id, teamB[0].id), opponentGet(teamA[1].id, teamB[1].id)];
     const maxRepeat = pairs.length ? Math.max(...pairs) : 0;
     const totalRepeats = pairs.reduce((s, v) => s + v, 0);
     // Pack into a single comparable number: maxRepeat dominates, totalRepeats breaks ties
@@ -2175,7 +2222,9 @@ renderCourts();
       startTime: null
     })));
     // Rebuild pairing history from saved game history so repeat-avoidance is accurate
-    pairingHistory.current = {};
+    partnerHistory.current = {};
+    opponentHistory.current = {};
+    groupHistory.current = {};
     gamesPlayedRef.current = {};
     joinRoundRef.current = {};
     roundsFiredRef.current = 0;
@@ -2212,7 +2261,9 @@ renderCourts();
     setManualCourt(null);
     setManualSelected([]);
     setScoreModal(null);
-    pairingHistory.current = {};
+    partnerHistory.current = {};
+    opponentHistory.current = {};
+    groupHistory.current = {};
     gamesPlayedRef.current = {};
     joinRoundRef.current = {};
     roundsFiredRef.current = 0;
@@ -2436,21 +2487,29 @@ renderCourts();
     // pairing freshness to break ties within that. Without this, freshness
     // alone can quietly keep passing over the same players once the group
     // is small enough that most repeat scores look similar.
+    //
+    // Group repeat (exact same 4 people, any split) is checked FIRST, ahead
+    // of both wait and freshness — pairwise freshness alone can't tell "same
+    // 4 people, reshuffled teams" apart from a genuinely new group, so this
+    // closes that gap before the existing wait/fresh comparison ever runs.
     const pickBest = candidates => {
       if (!candidates.length) return null;
       let best = candidates[0];
+      let bestGroupRepeat = ghGet(best.ids);
       let bestWait = worstQposIds(best.ids);
       let bestScore = scoreMatch(best.teamA, best.teamB);
       for (let ci = 1; ci < candidates.length; ci++) {
         const c = candidates[ci];
+        const groupRepeat = ghGet(c.ids);
         const wait = worstQposIds(c.ids);
         const s = scoreMatch(c.teamA, c.teamB);
         // When prioritizeFreshness is on, freshness (s) is compared first and
         // wait position only breaks ties. Otherwise wait position is checked
-        // first as originally designed.
-        const better = prioritizeFreshness ? s < bestScore || s === bestScore && wait < bestWait : wait < bestWait || wait === bestWait && s < bestScore;
+        // first as originally designed. Group repeat overrides both.
+        const better = groupRepeat < bestGroupRepeat || groupRepeat === bestGroupRepeat && (prioritizeFreshness ? s < bestScore || s === bestScore && wait < bestWait : wait < bestWait || wait === bestWait && s < bestScore);
         if (better) {
           best = c;
+          bestGroupRepeat = groupRepeat;
           bestWait = wait;
           bestScore = s;
         }
@@ -2463,9 +2522,13 @@ renderCourts();
     // Scoring per combo:
     //   1. Gender balance (1F per team if possible, gender rotation applied)
     //   2. Level balance (minimize average level diff between teams)
-    //   3. Wait priority: worst queue position in the group — players who have
+    //   3. Group repeat: has this EXACT foursome played together before,
+    //      regardless of how the teams were split? Pairwise freshness (step 5)
+    //      can't see this pattern on its own — a group can look "fresh" per-pair
+    //      while still being the same 4 people re-matched with a shuffled split.
+    //   4. Wait priority: worst queue position in the group — players who have
     //      waited longer push their combo up. This prevents anyone getting stuck.
-    //   4. Pairing + opponent freshness (new faces preferred)
+    //   5. Pairing + opponent freshness (new faces preferred)
     if (mode === 'Open Level') {
       const pool = sorted.slice(0, 20);
       const splits = [[0, 1, 2, 3], [0, 2, 1, 3], [0, 3, 1, 2]];
@@ -2501,12 +2564,13 @@ renderCourts();
             genderOk,
             wantedGender,
             levelBal: levelBalance(tA, tB),
+            groupRepeat: ghGet(players.map(p => p.id)),
             waitScore: worstQpos(players),
             fresh: scoreMatch(tA, tB)
           });
         }
         if (!candidates.length) return null;
-        candidates.sort((x, y) => y.genderOk - x.genderOk || x.wantedGender - y.wantedGender || x.levelBal - y.levelBal || (prioritizeFreshness ? (x.fresh - y.fresh) || (x.waitScore - y.waitScore) : (x.waitScore - y.waitScore) || (x.fresh - y.fresh)));
+        candidates.sort((x, y) => y.genderOk - x.genderOk || x.wantedGender - y.wantedGender || x.levelBal - y.levelBal || x.groupRepeat - y.groupRepeat || (prioritizeFreshness ? (x.fresh - y.fresh) || (x.waitScore - y.waitScore) : (x.waitScore - y.waitScore) || (x.fresh - y.fresh)));
         return candidates[0];
       };
       const combos = [];
@@ -2515,7 +2579,7 @@ renderCourts();
         if (c) combos.push(c);
       }
       if (!combos.length) return null;
-      combos.sort((x, y) => y.genderOk - x.genderOk || x.wantedGender - y.wantedGender || x.levelBal - y.levelBal || (prioritizeFreshness ? (x.fresh - y.fresh) || (x.waitScore - y.waitScore) : (x.waitScore - y.waitScore) || (x.fresh - y.fresh)));
+      combos.sort((x, y) => y.genderOk - x.genderOk || x.wantedGender - y.wantedGender || x.levelBal - y.levelBal || x.groupRepeat - y.groupRepeat || (prioritizeFreshness ? (x.fresh - y.fresh) || (x.waitScore - y.waitScore) : (x.waitScore - y.waitScore) || (x.fresh - y.fresh)));
       return combos[0];
     }
 
@@ -2577,7 +2641,8 @@ renderCourts();
     //   4. Queue anchor — prefer combos that include the longest-waiting player
     //      (soft, only breaks ties after fairness is satisfied)
     //   5. Gender rotation (wantMixed preference, falls back gracefully)
-    //   6. Pairing freshness (final tiebreaker)
+    //   6. Group repeat — same exact foursome before, any split? (via pickBest)
+    //   7. Pairing freshness (final tiebreaker, via pickBest)
     if (mode === 'Skill Based') {
       const activeCount = Math.max(4, sorted.length);
       const expectedRate = Math.min(1.0, 4 / activeCount);
@@ -3349,13 +3414,13 @@ renderCourts();
       return prev.filter(p => p.id !== id);
     });
   };
-  const exportWaitlistXLSX = () => {
+  const exportPlayerListXLSX = () => {
     if (!window.XLSX) {
       showNotif('Excel library not loaded yet, try again');
       return;
     }
-    const rows = queue.map((p, i) => {
-      const partner = p.partnerId ? queue.find(x => x.id === p.partnerId) : null;
+    const rows = playerList.map((p, i) => {
+      const partner = p.partnerId ? playerList.find(x => x.id === p.partnerId) : null;
       return {
         '#': i + 1,
         Name: p.name,
@@ -3381,12 +3446,12 @@ renderCourts();
       wch: 12
     }];
     const wb = window.XLSX.utils.book_new();
-    window.XLSX.utils.book_append_sheet(wb, ws, 'Waitlist');
+    window.XLSX.utils.book_append_sheet(wb, ws, 'Player List');
     const date = new Date().toISOString().slice(0, 10);
-    window.XLSX.writeFile(wb, `waitlist_${date}.xlsx`);
+    window.XLSX.writeFile(wb, `player_list_${date}.xlsx`);
     showNotif(`Exported ${rows.length} players to Excel!`);
   };
-  const importWaitlistXLSX = e => {
+  const importPlayerListXLSX = e => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!window.XLSX) {
@@ -3430,20 +3495,20 @@ renderCourts();
           }
           delete p._partnerName;
         });
+        // Import adds new players to both the master Player List and
+        // today's Waitlist, so they're ready to be matched immediately.
+        setPlayerList(prev => {
+          const existingNames = new Set(prev.map(p => p.name.toLowerCase()));
+          const fresh = newPlayers.filter(p => !existingNames.has(p.name.toLowerCase()));
+          return [...prev, ...fresh];
+        });
         setQueue(prev => {
-          // Avoid duplicates by name (case-insensitive)
           const existingNames = new Set(prev.map(p => p.name.toLowerCase()));
           const fresh = newPlayers.filter(p => !existingNames.has(p.name.toLowerCase()));
           // Record join round for each newly added player
           fresh.forEach(p => {
             if (joinRoundRef.current[p.id] === undefined) joinRoundRef.current[p.id] = roundsFiredRef.current;
           });
-          return [...prev, ...fresh];
-        });
-        // Also add to master playerList
-        setPlayerList(prev => {
-          const existingNames = new Set(prev.map(p => p.name.toLowerCase()));
-          const fresh = newPlayers.filter(p => !existingNames.has(p.name.toLowerCase()));
           return [...prev, ...fresh];
         });
         showNotif(`Imported ${newPlayers.length} players from Excel!`);
@@ -3455,24 +3520,19 @@ renderCourts();
     // Reset input so the same file can be re-imported
     e.target.value = '';
   };
-  const renamePlayer = (id, newName) => {
-    const trimmed = newName.trim();
-    if (!trimmed) return;
-    setQueue(prev => prev.map(p => p.id === id ? {
-      ...p,
-      name: trimmed,
-      level: editingPlayerLevel
-    } : p));
-    setEditingPlayerId(null);
-    setEditingPlayerName('');
-    setEditingPlayerLevel('Beginner');
-    showNotif(`Player updated to "${trimmed}"`);
-  };
-
   // Stats
   const activeCourts = courts.filter(c => c.players).length;
   const openCourts = courts.filter(c => !c.players).length;
   const onCourtCount = activeCourts * 4;
+  // Player Stats is a current standings view, not a game log — so identity
+  // fields (name/level/gender) should reflect the CURRENT Player List entry,
+  // not whatever this player's name/level happened to be in their first-ever
+  // recorded game. Numeric fields (games/wins/pts) still legitimately
+  // aggregate from history, since those are real running totals.
+  const playerListById = {};
+  playerList.forEach(p => {
+    playerListById[p.id] = p;
+  });
   const playerStats = {};
   history.forEach(g => {
     const all = [...g.teamA.map(p => ({
@@ -3489,15 +3549,20 @@ renderCourts();
       gender,
       team
     }) => {
-      if (!playerStats[id]) playerStats[id] = {
-        name,
-        level,
-        gender,
-        games: 0,
-        wins: 0,
-        pts: 0,
-        against: 0
-      };
+      if (!playerStats[id]) {
+        // Prefer the live Player List entry; fall back to the historical
+        // snapshot only if the player was since removed from Player List.
+        const current = playerListById[id];
+        playerStats[id] = {
+          name: current ? current.name : name,
+          level: current ? current.level : level,
+          gender: current ? current.gender : gender,
+          games: 0,
+          wins: 0,
+          pts: 0,
+          against: 0
+        };
+      }
       playerStats[id].games++;
       const won = team === 'A' && g.winner === 'A' || team === 'B' && g.winner === 'B';
       if (won) playerStats[id].wins++;
@@ -4008,8 +4073,12 @@ renderCourts();
     players: court.players.teamB,
     team: 'B'
   }].map((section, si) => section.players === null ? (() => {
-    // Show opponent repeat count between teams
-    const oppRepeats = court.players.teamA.flatMap(pA => court.players.teamB.map(pB => phGet(pA.id, pB.id))).reduce((a, b) => a + b, 0);
+    // Show exact-foursome repeat count: has this SAME 4 people played
+    // together before, regardless of split? Partner-repeat is already
+    // shown separately above, so this deliberately does not care about
+    // pairing — only whether these 4 specific players were on a court
+    // together before.
+    const groupRepeats = ghGet([...court.players.teamA, ...court.players.teamB].map(p => p.id));
     return /*#__PURE__*/React.createElement("div", {
       key: "vs",
       className: "team-divider",
@@ -4019,8 +4088,8 @@ renderCourts();
         justifyContent: 'center',
         gap: 6
       }
-    }, "— VS —", oppRepeats > 0 && /*#__PURE__*/React.createElement("span", {
-      title: `These 4 have faced each other ${oppRepeats} time${oppRepeats !== 1 ? 's' : ''} before`,
+    }, "— VS —", groupRepeats > 0 && /*#__PURE__*/React.createElement("span", {
+      title: `These exact 4 players have been on a court together ${groupRepeats} time${groupRepeats !== 1 ? 's' : ''} before`,
       style: {
         fontSize: 9,
         fontWeight: 800,
@@ -4030,7 +4099,7 @@ renderCourts();
         padding: '1px 5px',
         border: '1px solid var(--orange)44'
       }
-    }, "×", oppRepeats));
+    }, "×", groupRepeats));
   })() : /*#__PURE__*/React.createElement(React.Fragment, {
     key: section.team
   }, /*#__PURE__*/React.createElement("div", {
@@ -4044,7 +4113,7 @@ renderCourts();
   }, section.label, (() => {
     const [p0, p1] = section.players;
     if (!p0 || !p1) return null;
-    const partnerRepeats = phGet(p0.id, p1.id);
+    const partnerRepeats = partnerGet(p0.id, p1.id);
     return partnerRepeats > 0 ? /*#__PURE__*/React.createElement("span", {
       title: `${p0.name} & ${p1.name} have been partners ${partnerRepeats} time${partnerRepeats !== 1 ? 's' : ''} before`,
       style: {
@@ -4557,7 +4626,7 @@ renderCourts();
         }
       }, section.label), section.players.map(p => {
         const partner = section.players.find(x => x.id !== p.id);
-        const partnerRep = partner ? phGet(p.id, partner.id) : 0;
+        const partnerRep = partner ? partnerGet(p.id, partner.id) : 0;
         return /*#__PURE__*/React.createElement("div", {
           key: p.id,
           className: "player-slot",
@@ -4752,56 +4821,17 @@ renderCourts();
         key: p.id,
         className: "queue-item",
         style: {
-          flexWrap: editingPlayerId === p.id ? 'wrap' : 'nowrap'
+          flexWrap: 'nowrap'
         }
       }, /*#__PURE__*/React.createElement("span", {
         className: "queue-num"
       }, "#", queuePos), /*#__PURE__*/React.createElement(GenderTag, {
         gender: p.gender
-      }), editingPlayerId === p.id ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
-        autoFocus: true,
-        value: editingPlayerName,
-        onChange: e => setEditingPlayerName(e.target.value),
-        onKeyDown: e => {
-          if (e.key === 'Enter') renamePlayer(p.id, editingPlayerName);
-          if (e.key === 'Escape') {
-            setEditingPlayerId(null);
-            setEditingPlayerName('');
-            setEditingPlayerLevel('Beginner');
-          }
-        },
-        style: {
-          flex: 1,
-          padding: '3px 7px',
-          fontSize: 12,
-          borderRadius: 5,
-          border: '1px solid var(--blue)',
-          background: 'var(--surface)',
-          color: 'var(--text-main)',
-          outline: 'none',
-          minWidth: 0
-        }
-      }), /*#__PURE__*/React.createElement("select", {
-        value: editingPlayerLevel,
-        onChange: e => setEditingPlayerLevel(e.target.value),
-        style: {
-          padding: '3px 6px',
-          fontSize: 11,
-          borderRadius: 5,
-          border: '1px solid var(--blue)',
-          background: 'var(--surface)',
-          color: 'var(--text-main)',
-          outline: 'none',
-          width: 'auto'
-        }
-      }, LEVELS.map(l => /*#__PURE__*/React.createElement("option", {
-        key: l,
-        value: l
-      }, l)))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(LevelBadge, {
+      }), /*#__PURE__*/React.createElement(LevelBadge, {
         level: p.level
       }), /*#__PURE__*/React.createElement("span", {
         className: "queue-name"
-      }, p.name)), partner && /*#__PURE__*/React.createElement("span", {
+      }, p.name), partner && /*#__PURE__*/React.createElement("span", {
         className: "partner-tag",
         title: "Fixed pair",
         style: {
@@ -4822,17 +4852,7 @@ renderCourts();
           marginRight: 4,
           whiteSpace: 'nowrap'
         }
-      }, "🎮 ", gamesPlayed, "g"), editingPlayerId === p.id ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
-        className: "btn btn-green btn-sm",
-        onClick: () => renamePlayer(p.id, editingPlayerName)
-      }, "✓"), /*#__PURE__*/React.createElement("button", {
-        className: "btn btn-ghost btn-sm",
-        onClick: () => {
-          setEditingPlayerId(null);
-          setEditingPlayerName('');
-          setEditingPlayerLevel('Beginner');
-        }
-      }, "✕")) : /*#__PURE__*/React.createElement(React.Fragment, null, !partner && /*#__PURE__*/React.createElement("button", {
+      }, "🎮 ", gamesPlayed, "g"), /*#__PURE__*/React.createElement(React.Fragment, null, !partner && /*#__PURE__*/React.createElement("button", {
         className: "btn btn-ghost btn-sm",
         title: "Link fixed partner",
         style: {
@@ -4846,14 +4866,6 @@ renderCourts();
           setPairTarget(null);
         }
       }, "🔗"), /*#__PURE__*/React.createElement("button", {
-        className: "btn btn-ghost btn-sm",
-        title: "Edit player",
-        onClick: () => {
-          setEditingPlayerId(p.id);
-          setEditingPlayerName(p.name);
-          setEditingPlayerLevel(p.level);
-        }
-      }, "✏️"), /*#__PURE__*/React.createElement("button", {
         className: "btn btn-ghost btn-sm",
         onClick: () => removeFromQueue(p.id)
       }, "✕")));
@@ -5084,8 +5096,8 @@ renderCourts();
     setQueue: setQueue,
     courts: courts,
     showNotif: showNotif,
-    exportWaitlistXLSX: exportWaitlistXLSX,
-    importWaitlistXLSX: importWaitlistXLSX,
+    exportPlayerListXLSX: exportPlayerListXLSX,
+    importPlayerListXLSX: importPlayerListXLSX,
     addingPair: addingPair,
     setAddingPair: setAddingPair,
     newName: newName,
