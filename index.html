@@ -2520,7 +2520,12 @@ renderCourts();
     // ── OPEN LEVEL MODE ───────────────────────────────────────────────
     // Search the full queue (capped at 20 for performance).
     // Scoring per combo:
-    //   1. Gender balance (1F per team if possible, gender rotation applied)
+    //   1. Gender balance: only fc===2 (exactly 2 females in the group) is
+    //      gated on achieving a properly mixed split. Odd counts (1F or 3F)
+    //      can't be split more fairly regardless of arrangement, so they're
+    //      never penalized — otherwise a lone minority-gender player gets
+    //      starved indefinitely whenever the rest of the pool can keep
+    //      forming all-one-gender groups instead.
     //   2. Level balance (minimize average level diff between teams)
     //   3. Group repeat: has this EXACT foursome played together before,
     //      regardless of how the teams were split? Pairwise freshness (step 5)
@@ -2553,7 +2558,14 @@ renderCourts();
           if (!partnersRespected(tA, tB, mode)) continue;
           const fA = tA.filter(p => p.gender === 'F').length;
           const isMixed = fc === 2 && fA === 1;
-          const genderOk = fc === 2 && isMixed || fc === 0 || fc === 4;
+          // genderOk only needs to gate fc === 2 (the only female-count where a
+          // BETTER split is actually achievable — 1F+1F on the same team vs.
+          // properly mixed 1F per team). For fc === 1 or fc === 3, there is no
+          // fairer arrangement possible no matter how the teams are split, so
+          // treating those as "not OK" (as fc === 0/4 always were) permanently
+          // starves any lone minority-gender player whenever enough same-gender
+          // players exist elsewhere to keep forming fc === 0/4 combos instead.
+          const genderOk = fc === 2 ? isMixed : true;
           const wantedGender = forceMixed ? isMixed ? 0 : 1 : isMixed ? 1 : 0;
           const type = isMixed ? 'mixed' : fc === 4 ? 'womens' : fc === 0 ? 'mens' : 'uneven';
           candidates.push({
