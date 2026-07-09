@@ -1292,6 +1292,7 @@ function App() {
   const [rearrangeCourt, setRearrangeCourt] = useState(null); // courtId being rearranged
   const [dragPlayerId, setDragPlayerId] = useState(null); // id of player being dragged
   const [replacingPlayer, setReplacingPlayer] = useState(null); // { courtId, playerId } — sub-out mode
+  const [crossCourtSwap, setCrossCourtSwap] = useState(null); // { courtId, playerId } — swap-across-courts mode: this is the first player picked, waiting for a target player on a different court
   const [simModal, setSimModal] = useState(false);
   const [simGames, setSimGames] = useState('96');
   const [simRunning, setSimRunning] = useState(false);
@@ -3129,6 +3130,43 @@ renderCourts();
     }));
   };
 
+  // Swap ONE player from one court with ONE player from a different court —
+  // everyone else in both games stays exactly where they are. Both courts
+  // keep their own timers running since this isn't treated as ending
+  // either game.
+  const swapAcrossCourts = (courtIdA, playerIdA, courtIdB, playerIdB) => {
+    if (courtIdA === courtIdB) return;
+    const courtA = courts.find(c => c.id === courtIdA);
+    if (!courtA?.players || !courtB?.players) return;
+    const allA = [...courtA.players.teamA, ...courtA.players.teamB];
+    const allB = [...courtB.players.teamA, ...courtB.players.teamB];
+    const pA = allA.find(p => p.id === playerIdA);
+    const pB = allB.find(p => p.id === playerIdB);
+    if (!pA || !pB) return;
+    setCourts(prev => prev.map(c => {
+      if (c.id === courtIdA) {
+        return {
+          ...c,
+          players: {
+            teamA: c.players.teamA.map(p => p.id === playerIdA ? pB : p),
+            teamB: c.players.teamB.map(p => p.id === playerIdA ? pB : p)
+          }
+        };
+      }
+      if (c.id === courtIdB) {
+        return {
+          ...c,
+          players: {
+            teamA: c.players.teamA.map(p => p.id === playerIdB ? pA : p),
+            teamB: c.players.teamB.map(p => p.id === playerIdB ? pA : p)
+          }
+        };
+      }
+      return c;
+    }));
+    showNotif(`Swapped ${pA.name} (Court ${courtIdA}) with ${pB.name} (Court ${courtIdB})`);
+  };
+
   // Move (or swap) a court's current game to another court.
   // If the target court is empty, the game simply moves there.
   // If the target court already has an active game, the two courts swap games.
@@ -4190,6 +4228,8 @@ renderCourts();
     const isRearranging = rearrangeCourt === court.id;
     const isDropTarget = isRearranging && dragPlayerId && dragPlayerId !== p.id;
     const isBeingReplaced = replacingPlayer?.courtId === court.id && replacingPlayer?.playerId === p.id;
+    const isSwapSource = crossCourtSwap?.courtId === court.id && crossCourtSwap?.playerId === p.id;
+    const isSwapTarget = !!crossCourtSwap && crossCourtSwap.courtId !== court.id;
     return /*#__PURE__*/React.createElement(React.Fragment, {
       key: p.id
     }, /*#__PURE__*/React.createElement("div", {
@@ -4203,13 +4243,16 @@ renderCourts();
         swapCourtPlayers(court.id, dragPlayerId, p.id);
         setDragPlayerId(null);
       } : undefined,
-      onClick: !isRearranging && !replacingPlayer ? () => setRearrangeCourt(court.id) : undefined,
-      title: !isRearranging ? 'Click to rearrange players' : isDropTarget ? `Swap with ${p.name}` : 'Drag me',
+      onClick: crossCourtSwap ? (isSwapTarget ? () => {
+        swapAcrossCourts(crossCourtSwap.courtId, crossCourtSwap.playerId, court.id, p.id);
+        setCrossCourtSwap(null);
+      } : isSwapSource ? () => setCrossCourtSwap(null) : undefined) : !isRearranging && !replacingPlayer ? () => setRearrangeCourt(court.id) : undefined,
+      title: isSwapSource ? 'Selected for cross-court swap — click to cancel' : isSwapTarget ? `Swap in for the selected player` : crossCourtSwap ? undefined : !isRearranging ? 'Click to rearrange players' : isDropTarget ? `Swap with ${p.name}` : 'Drag me',
       style: {
         cursor: isRearranging ? isBeingDragged ? 'grabbing' : 'grab' : 'pointer',
         opacity: isBeingDragged ? 0.45 : 1,
-        border: isBeingReplaced ? '2px dashed var(--red)' : isDropTarget ? '2px dashed var(--gold)' : isRearranging ? '1px dashed var(--teal)' : undefined,
-        background: isBeingReplaced ? 'var(--red-dim)' : undefined,
+        border: isSwapSource ? '2px solid #ab47bc' : isSwapTarget ? '2px dashed #ab47bc' : isBeingReplaced ? '2px dashed var(--red)' : isDropTarget ? '2px dashed var(--gold)' : isRearranging ? '1px dashed var(--teal)' : undefined,
+        background: isSwapSource ? '#ab47bc22' : isSwapTarget ? '#ab47bc11' : isBeingReplaced ? 'var(--red-dim)' : undefined,
         transition: 'border 0.15s, opacity 0.15s, background 0.15s',
         userSelect: 'none'
       }
@@ -4263,7 +4306,35 @@ renderCourts();
         transition: 'all 0.15s'
       },
       disabled: queue.length === 0
-    }, "⚡"), /*#__PURE__*/React.createElement("button", {
+    }, "⚡"), courts.filter(c => c.enabled && c.players).length > 1 && /*#__PURE__*/React.createElement("button", {
+      title: isSwapSource ? 'Cancel cross-court swap' : 'Swap ' + p.name + ' with a player on another court',
+      onClick: e => {
+        e.stopPropagation();
+        if (isSwapSource) {
+          setCrossCourtSwap(null);
+        } else {
+          setReplacingPlayer(null);
+          setRearrangeCourt(null);
+          setCrossCourtSwap({
+            courtId: court.id,
+            playerId: p.id
+          });
+        }
+      },
+      style: {
+        background: isSwapSource ? '#ab47bc' : 'transparent',
+        border: '1px solid ' + (isSwapSource ? '#ab47bc' : '#ab47bc55'),
+        borderRadius: 4,
+        color: isSwapSource ? '#fff' : '#ab47bc',
+        fontSize: 11,
+        fontWeight: 800,
+        cursor: 'pointer',
+        padding: '2px 5px',
+        lineHeight: 1.4,
+        flexShrink: 0,
+        transition: 'all 0.15s'
+      }
+    }, "⇄"), /*#__PURE__*/React.createElement("button", {
       title: 'Manually choose sub for ' + p.name,
       onClick: e => {
         e.stopPropagation();
@@ -4393,6 +4464,11 @@ renderCourts();
       fontWeight: 900
     }
   }, "⚡"), ' ', "auto-fill \xA0·\xA0 ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: '#ab47bc',
+      fontWeight: 800
+    }
+  }, "⇄"), ' ', "cross-court swap \xA0·\xA0 ", /*#__PURE__*/React.createElement("span", {
     style: {
       color: 'var(--red)',
       fontWeight: 700
