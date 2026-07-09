@@ -4919,7 +4919,7 @@ renderCourts();
           marginRight: 4,
           whiteSpace: 'nowrap'
         }
-      }, "🎮 ", gamesPlayed, "g"), /*#__PURE__*/React.createElement(WaitTimer, {
+      }, "🎮 ", gamesPlayed, "g"), gamesPlayed > 0 && /*#__PURE__*/React.createElement(WaitTimer, {
         key: "wait-" + p.id,
         since: p.queuedAt || sessionStartedMs
       }), /*#__PURE__*/React.createElement(React.Fragment, null, !partner && /*#__PURE__*/React.createElement("button", {
