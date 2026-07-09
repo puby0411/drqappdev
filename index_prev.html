@@ -664,29 +664,6 @@ function CourtTimer({
     className: `court-timer ${cls}`
   }, rem < 0 ? '-' : '', min, ":", sec);
 }
-// Shows a live-updating "actual" wait duration for a player sitting in the
-// waitlist, counted from the moment they joined (or rejoined) the queue.
-function WaitTimer({
-  since
-}) {
-  const [elapsed, setElapsed] = useState(() => Math.max(0, Math.floor((Date.now() - since) / 1000)));
-  useEffect(() => {
-    const iv = setInterval(() => setElapsed(Math.max(0, Math.floor((Date.now() - since) / 1000))), 1000);
-    return () => clearInterval(iv);
-  }, [since]);
-  const min = Math.floor(elapsed / 60);
-  const sec = (elapsed % 60).toString().padStart(2, '0');
-  return /*#__PURE__*/React.createElement("span", {
-    className: "wait-timer",
-    style: {
-      fontSize: 11,
-      color: 'var(--text-muted)',
-      fontWeight: 600,
-      whiteSpace: 'nowrap'
-    },
-    title: "Time waited since joining the queue"
-  }, "⏱ ", min, "m ", sec, "s");
-}
 function PlayerListTab({
   playerList,
   setPlayerList,
@@ -727,8 +704,7 @@ function PlayerListTab({
     }
     if (onJoin) onJoin(p.id);
     setQueue(prev => [...prev, {
-      ...p,
-      queuedAt: Date.now()
+      ...p
     }]);
     showNotif(`${p.name} added to Waitlist!`);
   };
@@ -1203,34 +1179,8 @@ function PlayerListTab({
     }
   }, "+ Waitlist"), " to re-add a player to today's queue after they were removed."), /*#__PURE__*/React.createElement("div", null, "• Edit or remove players from the master list at any time."))));
 }
-
-// Courts are now independently toggled on/off (not a contiguous "first N" range).
-// MAX_COURTS matches the number of toggle buttons shown in the Courts control.
-const MAX_COURTS = 7;
-
-// Build a full MAX_COURTS-length court array from saved data, preserving each
-// court's id/players/startTime and figuring out its enabled state. Handles both
-// the new per-court `enabled` flag and older saves that only had a `numCourts`
-// count (in which case courts 1..numCourts were considered enabled).
-function normalizeCourts(savedCourts, fallbackNumCourts) {
-  const list = savedCourts || [];
-  const n = fallbackNumCourts ?? list.length ?? 3;
-  return Array.from({ length: MAX_COURTS }, (_, i) => {
-    const id = i + 1;
-    const existing = list.find(c => c.id === id);
-    if (existing) {
-      return {
-        id,
-        players: existing.players ?? null,
-        startTime: existing.startTime ?? null,
-        enabled: existing.enabled !== undefined ? existing.enabled : id <= n
-      };
-    }
-    return { id, players: null, startTime: null, enabled: false };
-  });
-}
-
 function App() {
+  const [numCourts, setNumCourts] = useState(() => loadLiveState()?.numCourts ?? 3);
   const [gameTime, setGameTime] = useState(() => loadLiveState()?.gameTime ?? 20);
   const [matchMode, setMatchMode] = useState(() => loadLiveState()?.matchMode ?? 'Same Level');
   // Open Level: when on (default), the algorithm forces a mixed-doubles round
@@ -1244,10 +1194,16 @@ function App() {
   const [queue, setQueue] = useState(() => loadLiveState()?.queue ?? INIT_PLAYERS);
   const [courts, setCourts] = useState(() => {
     const saved = loadLiveState();
-    return normalizeCourts(saved?.courts, saved?.numCourts ?? 3);
+    if (saved?.courts) return saved.courts;
+    const n = saved?.numCourts ?? 3;
+    return Array.from({
+      length: n
+    }, (_, i) => ({
+      id: i + 1,
+      players: null,
+      startTime: null
+    }));
   });
-  // Derived, not a separate state: the number of currently-enabled (on) courts.
-  const numCourts = courts.filter(c => c.enabled).length;
   const [history, setHistory] = useState(() => loadLiveState()?.history ?? []);
   const [newName, setNewName] = useState('');
   const [newLevel, setNewLevel] = useState('Open');
@@ -1562,7 +1518,7 @@ function App() {
         try {
           previewWinRef.current.postMessage({
             type: 'DR_PREVIEW_UPDATE',
-            courts: courts.filter(c => c.enabled),
+            courts,
             gameTime,
             sessionName,
             lightMode,
@@ -1581,7 +1537,7 @@ function App() {
       try {
         previewWinRef.current.postMessage({
           type: 'DR_PREVIEW_UPDATE',
-          courts: courts.filter(c => c.enabled),
+          courts,
           gameTime,
           sessionName,
           lightMode,
@@ -1636,7 +1592,7 @@ function App() {
       try {
         previewWinRef.current.postMessage({
           type: 'DR_PREVIEW_UPDATE',
-          courts: courts.filter(c => c.enabled),
+          courts,
           gameTime,
           sessionName,
           lightMode,
@@ -1652,7 +1608,7 @@ function App() {
     const url = URL.createObjectURL(blob);
     const win = window.open(url, 'DinkPreview', 'width=1200,height=750,resizable=yes,scrollbars=yes');
     previewWinRef.current = win;
-    const courtsSnap = courts.filter(c => c.enabled),
+    const courtsSnap = courts,
       gtSnap = gameTime,
       snSnap = sessionName,
       lmSnap = lightMode;
@@ -2253,11 +2209,18 @@ renderCourts();
   const loadSession = snap => {
     setSessionName(snap.name);
     setSessionStarted(snap.startedAt);
+    setNumCourts(snap.numCourts);
     setGameTime(snap.gameTime);
     setMatchMode(snap.matchMode);
     setQueue(snap.queue || []);
     setHistory(snap.history || []);
-    setCourts(normalizeCourts(snap.courts, snap.numCourts));
+    setCourts(snap.courts || Array.from({
+      length: snap.numCourts
+    }, (_, i) => ({
+      id: i + 1,
+      players: null,
+      startTime: null
+    })));
     // Rebuild pairing history from saved game history so repeat-avoidance is accurate
     partnerHistory.current = {};
     opponentHistory.current = {};
@@ -2288,8 +2251,10 @@ renderCourts();
     setQueue([]);
     setHistory([]);
     setPlayerList([]);
-    setCourts(prev => prev.map(c => ({
-      ...c,
+    setCourts(Array.from({
+      length: numCourts
+    }, (_, i) => ({
+      id: i + 1,
       players: null,
       startTime: null
     })));
@@ -2324,16 +2289,31 @@ renderCourts();
     if (notifTimer.current) clearTimeout(notifTimer.current);
     notifTimer.current = setTimeout(() => setNotification(null), 3000);
   };
-  const toggleCourt = n => {
-    const court = courts.find(c => c.id === n);
-    if (!court) return;
-    // Turning a court OFF while it has an ongoing game is blocked outright —
-    // no override — to avoid losing live games.
-    if (court.enabled && court.players) {
-      showNotif(`Court ${n} has an ongoing game — end it before turning it off.`);
-      return;
+  const updateCourts = n => {
+    // Adding courts is always allowed. Removing a court that has an ongoing
+    // game is blocked outright — no override — to avoid losing live games.
+    if (n < courts.length) {
+      const removedCourts = courts.slice(n);
+      const activeRemoved = removedCourts.filter(c => c.players);
+      if (activeRemoved.length > 0) {
+        const courtLabel = activeRemoved.length > 1 ? `Courts ${activeRemoved.map(c => c.id).join(', ')} have` : `Court ${activeRemoved[0].id} has`;
+        showNotif(`${courtLabel} an ongoing game — end it before reducing the number of courts.`);
+        return;
+      }
     }
-    setCourts(prev => prev.map(c => c.id === n ? { ...c, enabled: !c.enabled } : c));
+    setNumCourts(n);
+    setCourts(prev => {
+      if (n > prev.length) {
+        return [...prev, ...Array.from({
+          length: n - prev.length
+        }, (_, i) => ({
+          id: prev.length + i + 1,
+          players: null,
+          startTime: null
+        }))];
+      }
+      return prev.slice(0, n);
+    });
   };
 
   // Gender validation: if any female is present, exactly 2 females required (1 per team = mixed doubles).
@@ -2821,7 +2801,7 @@ renderCourts();
       showNotif('Switch to Auto mode or use Assign Manually on a court');
       return;
     }
-    const open = targetCourtId ? courts.find(c => c.id === targetCourtId && c.enabled && !c.players) : courts.find(c => c.enabled && !c.players);
+    const open = targetCourtId ? courts.find(c => c.id === targetCourtId && !c.players) : courts.find(c => !c.players);
     if (!open) {
       showNotif('No open courts available');
       return;
@@ -2898,7 +2878,7 @@ renderCourts();
   // they are (queue or just returned from court) and fills an open court.
   // It does NOT touch the rest of the queue order at all.
   const startRequestedGame = req => {
-    const open = courts.find(c => c.enabled && !c.players);
+    const open = courts.find(c => !c.players);
     if (!open) {
       showNotif('No open courts — end a game first');
       return;
@@ -2965,7 +2945,7 @@ renderCourts();
       // Fill all open courts
       let filledAny = false;
       for (let ci = 0; ci < localCourts.length; ci++) {
-        if (!localCourts[ci].enabled || localCourts[ci].players) continue;
+        if (localCourts[ci].players) continue;
         if (localQueue.length < 4) break;
         localAssignCount += 1;
         let forceMixed = false;
@@ -3024,7 +3004,7 @@ renderCourts();
             minute: '2-digit'
           })
         });
-        localQueue = [...localQueue, ...teamA.map(p => ({ ...p, queuedAt: Date.now() })), ...teamB.map(p => ({ ...p, queuedAt: Date.now() }))];
+        localQueue = [...localQueue, ...teamA, ...teamB];
         // Track games played for fairness scoring
         [...teamA, ...teamB].forEach(p => {
           gamesPlayedRef.current[p.id] = (gamesPlayedRef.current[p.id] || 0) + 1;
@@ -3180,8 +3160,7 @@ renderCourts();
     // Remove replacement from queue; put removed player at front so they're next up
     setQueue(prev => {
       const withoutIn = prev.filter(p => p.id !== inPlayer.id);
-      const requeuedOut = outPlayer ? { ...outPlayer, queuedAt: Date.now() } : null;
-      return requeuedOut ? [requeuedOut, ...withoutIn] : withoutIn;
+      return outPlayer ? [outPlayer, ...withoutIn] : withoutIn;
     });
     setReplacingPlayer(null);
     showNotif(`${inPlayer.name} subbed in for ${outPlayer?.name || 'player'}!`);
@@ -3234,8 +3213,7 @@ renderCourts();
     }));
     setQueue(prev => {
       const withoutIn = prev.filter(p => p.id !== bestCandidate.id);
-      const requeuedOut = outPlayer ? { ...outPlayer, queuedAt: Date.now() } : null;
-      return requeuedOut ? [requeuedOut, ...withoutIn] : withoutIn;
+      return outPlayer ? [outPlayer, ...withoutIn] : withoutIn;
     });
     setReplacingPlayer(null);
     const msg = 'Auto-filled: ' + bestCandidate.name + ' in for ' + outPlayer.name + '!';
@@ -3269,10 +3247,7 @@ renderCourts();
       const isMixed = fCount === 2;
       olSameGenderStreak.current = isMixed ? 0 : olSameGenderStreak.current + 1;
     }
-    const returningPlayers = [...modalTeamA, ...modalTeamB].map(p => ({
-      ...p,
-      queuedAt: finishTime
-    }));
+    const returningPlayers = [...modalTeamA, ...modalTeamB];
     const newHistEntry = {
       id: Date.now(),
       courtId,
@@ -3392,16 +3367,14 @@ renderCourts();
         name: newName.trim(),
         level: newLevel,
         gender: newGender,
-        partnerId: id2,
-        queuedAt: Date.now()
+        partnerId: id2
       };
       const p2 = {
         id: id2,
         name: newPartnerName.trim(),
         level: newPartnerLevel,
         gender: newPartnerGender,
-        partnerId: id1,
-        queuedAt: Date.now()
+        partnerId: id1
       };
       // Record join round for late-arrival fairness (only set once, never overwritten)
       if (joinRoundRef.current[id1] === undefined) joinRoundRef.current[id1] = roundsFiredRef.current;
@@ -3425,8 +3398,7 @@ renderCourts();
         name: newName.trim(),
         level: newLevel,
         gender: newGender,
-        partnerId: null,
-        queuedAt: Date.now()
+        partnerId: null
       };
       // Record join round for late-arrival fairness (only set once, never overwritten)
       if (joinRoundRef.current[p.id] === undefined) joinRoundRef.current[p.id] = roundsFiredRef.current;
@@ -3561,20 +3533,9 @@ renderCourts();
     e.target.value = '';
   };
   // Stats
-  const activeCourts = courts.filter(c => c.enabled && c.players).length;
-  const openCourts = courts.filter(c => c.enabled && !c.players).length;
+  const activeCourts = courts.filter(c => c.players).length;
+  const openCourts = courts.filter(c => !c.players).length;
   const onCourtCount = activeCourts * 4;
-  // Estimated average wait time for players currently in the waitlist.
-  // Model: players move through the queue in "rounds" — every `gameTime`
-  // minutes, up to (enabled courts × 4) players come off court and the same
-  // number move up from the front of the queue. A waiting player's average
-  // position in that line is (queue.length + 1) / 2, so their expected number
-  // of rounds to wait is that average position divided by the per-round
-  // capacity, times the length of a round.
-  const roundCapacity = numCourts * 4;
-  const avgWaitMinutes = roundCapacity > 0 && queue.length > 0 ? Math.round((queue.length + 1) / 2 / roundCapacity * gameTime) : 0;
-  // Fallback "joined queue" time for players saved before wait-time tracking existed.
-  const sessionStartedMs = new Date(sessionStarted).getTime();
   // Player Stats is a current standings view, not a game log — so identity
   // fields (name/level/gender) should reflect the CURRENT Player List entry,
   // not whatever this player's name/level happened to be in their first-ever
@@ -3927,9 +3888,8 @@ renderCourts();
     className: "ctrl-label"
   }, "Courts"), [1, 2, 3, 4, 5, 6, 7].map(n => /*#__PURE__*/React.createElement("button", {
     key: n,
-    className: `time-btn ${courts.find(c => c.id === n)?.enabled ? 'active' : ''}`,
-    title: courts.find(c => c.id === n)?.enabled ? `Turn Court ${n} off` : `Turn Court ${n} on`,
-    onClick: () => toggleCourt(n)
+    className: `time-btn ${numCourts === n ? 'active' : ''}`,
+    onClick: () => updateCourts(n)
   }, n))), /*#__PURE__*/React.createElement("div", {
     className: "divider-v"
   }), /*#__PURE__*/React.createElement("div", {
@@ -4023,7 +3983,7 @@ renderCourts();
     onClick: () => setActiveTab(key)
   }, label))), activeTab === 'courts' && /*#__PURE__*/React.createElement("div", {
     className: "courts-grid"
-  }, courts.filter(c => c.enabled).map(court => /*#__PURE__*/React.createElement("div", {
+  }, courts.map(court => /*#__PURE__*/React.createElement("div", {
     key: court.id,
     className: `court-card ${court.players ? 'active' : 'open'}`
   }, /*#__PURE__*/React.createElement("div", {
@@ -4409,7 +4369,7 @@ renderCourts();
       setRearrangeCourt(null);
       endGame(court.id);
     }
-  }, "End & Score")), rearrangeCourt !== court.id && courts.filter(c => c.enabled).length > 1 && /*#__PURE__*/React.createElement("select", {
+  }, "End & Score")), rearrangeCourt !== court.id && courts.length > 1 && /*#__PURE__*/React.createElement("select", {
     value: "",
     title: "Move this game to another court",
     onChange: e => {
@@ -4431,7 +4391,7 @@ renderCourts();
     }
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
-  }, "⇄ Move to another court…"), courts.filter(c => c.id !== court.id && c.enabled).map(c => /*#__PURE__*/React.createElement("option", {
+  }, "⇄ Move to another court…"), courts.filter(c => c.id !== court.id).map(c => /*#__PURE__*/React.createElement("option", {
     key: c.id,
     value: c.id
   }, c.players ? `Swap with Court ${c.id}` : `Move to Court ${c.id}`)))) : /*#__PURE__*/React.createElement(React.Fragment, null, [0, 1, 2, 3].map(i => /*#__PURE__*/React.createElement("div", {
@@ -4794,14 +4754,6 @@ renderCourts();
     }
   }, "Listed in registration order — earliest arrivals get priority.", matchMode === 'Skill Based' && ' Skill Based: adjacent levels, mixed gender every 3rd game.', matchMode === 'Open Level' && ' Open Level: all skill levels, balanced teams.'), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 11,
-      color: 'var(--text-dim)',
-      marginBottom: 8,
-      lineHeight: 1.5
-    },
-    title: "Estimated from players waiting, active courts, and the time limit"
-  }, "Average wait time: ", roundCapacity > 0 ? (queue.length > 0 ? `~${avgWaitMinutes}m` : 'No wait — courts available') : 'No active courts'), /*#__PURE__*/React.createElement("div", {
-    style: {
       display: 'flex',
       gap: 4,
       flexWrap: 'wrap',
@@ -4912,10 +4864,7 @@ renderCourts();
           marginRight: 4,
           whiteSpace: 'nowrap'
         }
-      }, "🎮 ", gamesPlayed, "g"), /*#__PURE__*/React.createElement(WaitTimer, {
-        key: "wait-" + p.id,
-        since: p.queuedAt || sessionStartedMs
-      }), /*#__PURE__*/React.createElement(React.Fragment, null, !partner && /*#__PURE__*/React.createElement("button", {
+      }, "🎮 ", gamesPlayed, "g"), /*#__PURE__*/React.createElement(React.Fragment, null, !partner && /*#__PURE__*/React.createElement("button", {
         className: "btn btn-ghost btn-sm",
         title: "Link fixed partner",
         style: {
@@ -5222,7 +5171,7 @@ renderCourts();
     const allFree = allFound && players.every(p => !p.onCourt);
     const allRoundedUp = allFound && players.every(p => p.roundedUp);
     const someOnCourt = players.some(p => p && p.onCourt);
-    const hasOpenCourt = courts.some(c => c.enabled && !c.players);
+    const hasOpenCourt = courts.some(c => !c.players);
     const canStart = allFree && hasOpenCourt;
     const isReadyToFire = !!req.readyToFire;
     // Count others in queue ahead of these 4
