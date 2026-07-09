@@ -3137,6 +3137,7 @@ renderCourts();
   const swapAcrossCourts = (courtIdA, playerIdA, courtIdB, playerIdB) => {
     if (courtIdA === courtIdB) return;
     const courtA = courts.find(c => c.id === courtIdA);
+    const courtB = courts.find(c => c.id === courtIdB);
     if (!courtA?.players || !courtB?.players) return;
     const allA = [...courtA.players.teamA, ...courtA.players.teamB];
     const allB = [...courtB.players.teamA, ...courtB.players.teamB];
