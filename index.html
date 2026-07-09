@@ -3565,14 +3565,21 @@ renderCourts();
   const openCourts = courts.filter(c => c.enabled && !c.players).length;
   const onCourtCount = activeCourts * 4;
   // Estimated average wait time for players currently in the waitlist.
-  // Model: players move through the queue in "rounds" — every `gameTime`
-  // minutes, up to (enabled courts × 4) players come off court and the same
-  // number move up from the front of the queue. A waiting player's average
-  // position in that line is (queue.length + 1) / 2, so their expected number
-  // of rounds to wait is that average position divided by the per-round
-  // capacity, times the length of a round.
-  const roundCapacity = numCourts * 4;
-  const avgWaitMinutes = roundCapacity > 0 && queue.length > 0 ? Math.round((queue.length + 1) / 2 / roundCapacity * gameTime) : 0;
+  // Formula: (Total players / Active players - 1) × Game time
+  //   Total players  = players in queue + players on court
+  //   Active players = selected courts × 4 (a constant — how many players
+  //   are physically sitting on a court right now doesn't change this;
+  //   it's numCourts × 4, not activeCourts × 4)
+  //   Game time      = the configured game time limit
+  // Min/Max are the same ratio floored/ceiled instead of rounded, so they
+  // track totalPlayers just like avg does — they won't drift just because
+  // the in-queue/on-court split changes while totalPlayers stays the same.
+  const activePlayers = numCourts * 4;
+  const totalPlayers = queue.length + onCourtCount;
+  const waitRounds = activePlayers > 0 ? totalPlayers / activePlayers - 1 : 0;
+  const avgWaitMinutes = activePlayers > 0 && queue.length > 0 ? Math.max(0, Math.round(waitRounds * gameTime * 10) / 10) : 0;
+  const minWaitMinutes = activePlayers > 0 && queue.length > 0 ? Math.max(0, Math.floor(waitRounds) * gameTime) : 0;
+  const maxWaitMinutes = activePlayers > 0 && queue.length > 0 ? Math.max(0, Math.ceil(waitRounds) * gameTime) : 0;
   // Fallback "joined queue" time for players saved before wait-time tracking existed.
   const sessionStartedMs = new Date(sessionStarted).getTime();
   // Player Stats is a current standings view, not a game log — so identity
@@ -4800,7 +4807,7 @@ renderCourts();
       lineHeight: 1.5
     },
     title: "Estimated from players waiting, active courts, and the time limit"
-  }, "Average wait time: ", roundCapacity > 0 ? (queue.length > 0 ? `~${avgWaitMinutes}m` : 'No wait — courts available') : 'No active courts'), /*#__PURE__*/React.createElement("div", {
+  }, "Average wait time: ", activePlayers > 0 ? (queue.length > 0 ? `${avgWaitMinutes}min      Estimated ${minWaitMinutes}-${maxWaitMinutes}min` : 'No wait — courts available') : 'No active courts'), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 4,
