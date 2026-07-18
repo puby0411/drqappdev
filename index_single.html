@@ -178,6 +178,39 @@
 </head>
 <body>
 <div id="root"></div>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+  import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyDRXqdW8p8rhxT405TzjmqY3g6DnArFmgk",
+    authDomain: "drqapp.firebaseapp.com",
+    projectId: "drqapp",
+    storageBucket: "drqapp.firebasestorage.app",
+    messagingSenderId: "443646818076",
+    appId: "1:443646818076:web:608982d5f7d97f4ebf6cd9"
+  };
+
+  const fbApp = initializeApp(firebaseConfig);
+  const db = getFirestore(fbApp);
+
+  // Exposed to the classic (non-module) app script below.
+  window.fbUsers = {
+    subscribe(callback) {
+      return onSnapshot(
+        collection(db, 'openplay_users'),
+        snap => callback(snap.docs.map(d => d.data())),
+        err => console.error('openplay_users snapshot error:', err)
+      );
+    },
+    async upsert(user) {
+      await setDoc(doc(db, 'openplay_users', user.id), user);
+    },
+    async remove(id) {
+      await deleteDoc(doc(db, 'openplay_users', id));
+    }
+  };
+</script>
 <script>/**
  * @license React
  * react.production.min.js
@@ -532,7 +565,22 @@ const BADGE_CLASS = {
   'Advanced': 'badge-adv'
 };
 const TIME_OPTIONS = [15, 20, 24, 30];
-const MATCH_MODES = ['Same Level', 'Skill Based', 'Open Level', 'Manual'];
+const MATCH_MODES = ['Same Level', 'Skill Based', 'Open Level', 'OP Multi Group', 'OP Meet', 'Manual'];
+// ── PIN authentication ──────────────────────────────────────────────────
+// The Superadmin PIN (72890) is never stored in plaintext — only its hash
+// is kept here, and every login attempt is hashed the same way before
+// comparing. Uses a simple synchronous hash (not crypto.subtle) so it keeps
+// working even when this file is opened directly (file://) or served over
+// plain HTTP, where the Web Crypto API's secure-context requirement can
+// make crypto.subtle unavailable.
+const SUPERADMIN_PIN_HASH = '0bfea48f';
+function simpleHash(str) {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) + hash + str.charCodeAt(i) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
 let nextId = 200;
 const uid = () => `p${nextId++}`;
 const INIT_PLAYERS = [{
@@ -712,14 +760,36 @@ function PlayerListTab({
   setNewPartnerLevel,
   newPartnerGender,
   setNewPartnerGender,
+  matchMode,
+  playGroups,
+  newGroup,
+  setNewGroup,
+  newPartnerGroup,
+  setNewPartnerGroup,
+  teams,
+  newTeam,
+  setNewTeam,
+  newPartnerTeam,
+  setNewPartnerTeam,
   addPlayer,
   onJoin
 }) {
   const [plEditId, setPlEditId] = useState(null);
   const [plEditName, setPlEditName] = useState('');
   const [plEditLevel, setPlEditLevel] = useState('Open');
+  const [plEditGroup, setPlEditGroup] = useState('');
+  const [plEditTeam, setPlEditTeam] = useState('');
   const [plEditGender, setPlEditGender] = useState('M');
-  const filtered = playerList.filter(p => !playerListSearch.trim() || p.name.toLowerCase().includes(playerListSearch.trim().toLowerCase()));
+  // Group/Team sub-tab filter (mirrors the Waitlist tab's filter pills).
+  const [plGroupFilter, setPlGroupFilter] = useState(null);
+  const [plTeamFilter, setPlTeamFilter] = useState(null);
+  let filtered = playerList.filter(p => !playerListSearch.trim() || p.name.toLowerCase().includes(playerListSearch.trim().toLowerCase()));
+  if (matchMode === 'OP Multi Group' && plGroupFilter) {
+    filtered = filtered.filter(p => plGroupFilter === '__unassigned__' ? !p.group : p.group === plGroupFilter);
+  }
+  if (matchMode === 'OP Meet' && plTeamFilter) {
+    filtered = filtered.filter(p => plTeamFilter === '__unassigned__' ? !p.team : p.team === plTeamFilter);
+  }
   const addToWaitlist = p => {
     if (queue.some(q => q.id === p.id || q.name.toLowerCase() === p.name.toLowerCase())) {
       showNotif(`${p.name} is already in the waitlist`);
@@ -761,7 +831,9 @@ function PlayerListTab({
       ...p,
       name: trimmed,
       level: plEditLevel,
-      gender: plEditGender
+      gender: plEditGender,
+      ...(matchMode === 'OP Multi Group' ? { group: plEditGroup || null } : {}),
+      ...(matchMode === 'OP Meet' ? { team: plEditTeam || null } : {})
     } : p));
     // Player List is the single place edits are made — propagate the same
     // change into the live Waitlist entry (if this player is queued).
@@ -771,7 +843,9 @@ function PlayerListTab({
       ...p,
       name: trimmed,
       level: plEditLevel,
-      gender: plEditGender
+      gender: plEditGender,
+      ...(matchMode === 'OP Multi Group' ? { group: plEditGroup || null } : {}),
+      ...(matchMode === 'OP Meet' ? { team: plEditTeam || null } : {})
     } : p));
     setPlEditId(null);
     showNotif('Player updated!');
@@ -889,7 +963,109 @@ function PlayerListTab({
       lineHeight: 1,
       padding: 0
     }
-  }, "✕")), filtered.length === 0 ? /*#__PURE__*/React.createElement("div", {
+  }, "✕")), matchMode === 'OP Multi Group' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setPlGroupFilter(null),
+    style: {
+      padding: '4px 10px',
+      borderRadius: 20,
+      border: `1px solid ${!plGroupFilter ? 'var(--teal)' : 'var(--border)'}`,
+      background: !plGroupFilter ? 'var(--teal-dim, rgba(0,150,150,0.15))' : 'transparent',
+      color: !plGroupFilter ? 'var(--teal)' : 'var(--text-muted)',
+      fontSize: 11,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, "All (", playerList.length, ")"), playGroups.map(g => {
+    const count = playerList.filter(p => p.group === g.id).length;
+    return /*#__PURE__*/React.createElement("button", {
+      key: g.id,
+      onClick: () => setPlGroupFilter(g.id),
+      style: {
+        padding: '4px 10px',
+        borderRadius: 20,
+        border: `1px solid ${plGroupFilter === g.id ? 'var(--teal)' : 'var(--border)'}`,
+        background: plGroupFilter === g.id ? 'var(--teal-dim, rgba(0,150,150,0.15))' : 'transparent',
+        color: plGroupFilter === g.id ? 'var(--teal)' : 'var(--text-muted)',
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, "🏟 ", g.name, " (", count, ")");
+  }), (() => {
+    const unassignedCount = playerList.filter(p => !p.group).length;
+    if (!unassignedCount) return null;
+    return /*#__PURE__*/React.createElement("button", {
+      onClick: () => setPlGroupFilter('__unassigned__'),
+      style: {
+        padding: '4px 10px',
+        borderRadius: 20,
+        border: `1px solid ${plGroupFilter === '__unassigned__' ? 'var(--red)' : 'var(--border)'}`,
+        background: plGroupFilter === '__unassigned__' ? 'rgba(255,0,0,0.1)' : 'transparent',
+        color: plGroupFilter === '__unassigned__' ? 'var(--red)' : 'var(--text-muted)',
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, "No Group (", unassignedCount, ")");
+  })()), matchMode === 'OP Meet' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setPlTeamFilter(null),
+    style: {
+      padding: '4px 10px',
+      borderRadius: 20,
+      border: `1px solid ${!plTeamFilter ? 'var(--purple, #9c27b0)' : 'var(--border)'}`,
+      background: !plTeamFilter ? 'rgba(156,39,176,0.15)' : 'transparent',
+      color: !plTeamFilter ? 'var(--purple, #9c27b0)' : 'var(--text-muted)',
+      fontSize: 11,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, "All (", playerList.length, ")"), teams.map(t => {
+    const count = playerList.filter(p => p.team === t.id).length;
+    return /*#__PURE__*/React.createElement("button", {
+      key: t.id,
+      onClick: () => setPlTeamFilter(t.id),
+      style: {
+        padding: '4px 10px',
+        borderRadius: 20,
+        border: `1px solid ${plTeamFilter === t.id ? 'var(--purple, #9c27b0)' : 'var(--border)'}`,
+        background: plTeamFilter === t.id ? 'rgba(156,39,176,0.15)' : 'transparent',
+        color: plTeamFilter === t.id ? 'var(--purple, #9c27b0)' : 'var(--text-muted)',
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, "🤝 ", t.name, " (", count, ")");
+  }), (() => {
+    const unassignedCount = playerList.filter(p => !p.team).length;
+    if (!unassignedCount) return null;
+    return /*#__PURE__*/React.createElement("button", {
+      onClick: () => setPlTeamFilter('__unassigned__'),
+      style: {
+        padding: '4px 10px',
+        borderRadius: 20,
+        border: `1px solid ${plTeamFilter === '__unassigned__' ? 'var(--red)' : 'var(--border)'}`,
+        background: plTeamFilter === '__unassigned__' ? 'rgba(255,0,0,0.1)' : 'transparent',
+        color: plTeamFilter === '__unassigned__' ? 'var(--red)' : 'var(--text-muted)',
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, "No Team (", unassignedCount, ")");
+  })()), filtered.length === 0 ? /*#__PURE__*/React.createElement("div", {
     className: "empty-state"
   }, playerList.length === 0 ? 'No players yet. Add some →' : 'No players match search.') : /*#__PURE__*/React.createElement("div", {
     className: "queue-list",
@@ -911,7 +1087,29 @@ function PlayerListTab({
       level: p.level
     }), /*#__PURE__*/React.createElement("span", {
       className: "queue-name"
-    }, p.name), inQueue && /*#__PURE__*/React.createElement("span", {
+    }, p.name), matchMode === 'OP Multi Group' && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        color: p.group ? 'var(--teal)' : 'var(--red)',
+        background: p.group ? 'var(--teal-dim, rgba(0,150,150,0.15))' : 'rgba(255,0,0,0.12)',
+        borderRadius: 10,
+        padding: '1px 6px',
+        flexShrink: 0,
+        whiteSpace: 'nowrap'
+      }
+    }, "🏟 ", p.group ? playGroups.find(s => s.id === p.group)?.name || '—' : 'No group'), matchMode === 'OP Meet' && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        color: p.team ? 'var(--purple, #9c27b0)' : 'var(--red)',
+        background: p.team ? 'rgba(156,39,176,0.15)' : 'rgba(255,0,0,0.12)',
+        borderRadius: 10,
+        padding: '1px 6px',
+        flexShrink: 0,
+        whiteSpace: 'nowrap'
+      }
+    }, "🤝 ", p.team ? teams.find(t => t.id === p.team)?.name || '—' : 'No team'), inQueue && /*#__PURE__*/React.createElement("span", {
       style: {
         fontSize: 10,
         fontWeight: 800,
@@ -958,6 +1156,8 @@ function PlayerListTab({
         setPlEditName(p.name);
         setPlEditLevel(p.level);
         setPlEditGender(p.gender);
+        setPlEditGroup(p.group || '');
+        setPlEditTeam(p.team || '');
       },
       title: onCourt ? 'Cannot edit while player is in a game' : 'Edit'
     }, "✏️"), /*#__PURE__*/React.createElement("button", {
@@ -988,7 +1188,33 @@ function PlayerListTab({
     }, LEVELS.map(l => /*#__PURE__*/React.createElement("option", {
       key: l,
       value: l
-    }, l))), /*#__PURE__*/React.createElement("button", {
+    }, l))), matchMode === 'OP Multi Group' && /*#__PURE__*/React.createElement("select", {
+      value: plEditGroup,
+      onChange: e => setPlEditGroup(e.target.value),
+      style: {
+        fontSize: 12,
+        padding: '4px 6px',
+        width: 'auto'
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "No group"), playGroups.map(s => /*#__PURE__*/React.createElement("option", {
+      key: s.id,
+      value: s.id
+    }, s.name))), matchMode === 'OP Meet' && /*#__PURE__*/React.createElement("select", {
+      value: plEditTeam,
+      onChange: e => setPlEditTeam(e.target.value),
+      style: {
+        fontSize: 12,
+        padding: '4px 6px',
+        width: 'auto'
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "No team"), teams.map(t => /*#__PURE__*/React.createElement("option", {
+      key: t.id,
+      value: t.id
+    }, t.name))), /*#__PURE__*/React.createElement("button", {
       onClick: () => setPlEditGender(g => g === 'M' ? 'F' : 'M'),
       style: {
         background: 'var(--surface3)',
@@ -1069,7 +1295,31 @@ function PlayerListTab({
   }, LEVELS.map(l => /*#__PURE__*/React.createElement("option", {
     key: l,
     value: l
-  }, l))), /*#__PURE__*/React.createElement("div", {
+  }, l))), matchMode === 'OP Multi Group' && /*#__PURE__*/React.createElement("select", {
+    value: newGroup,
+    onChange: e => setNewGroup(e.target.value),
+    style: {
+      marginBottom: 6,
+      borderColor: !newGroup ? 'var(--red)' : undefined
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Select group\u2026"), playGroups.map(s => /*#__PURE__*/React.createElement("option", {
+    key: s.id,
+    value: s.id
+  }, s.name))), matchMode === 'OP Meet' && /*#__PURE__*/React.createElement("select", {
+    value: newTeam,
+    onChange: e => setNewTeam(e.target.value),
+    style: {
+      marginBottom: 6,
+      borderColor: !newTeam ? 'var(--red)' : undefined
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Select team\u2026"), teams.map(t => /*#__PURE__*/React.createElement("option", {
+    key: t.id,
+    value: t.id
+  }, t.name))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 6
@@ -1137,7 +1387,31 @@ function PlayerListTab({
   }, LEVELS.map(l => /*#__PURE__*/React.createElement("option", {
     key: l,
     value: l
-  }, l))), /*#__PURE__*/React.createElement("div", {
+  }, l))), matchMode === 'OP Multi Group' && /*#__PURE__*/React.createElement("select", {
+    value: newPartnerGroup,
+    onChange: e => setNewPartnerGroup(e.target.value),
+    style: {
+      borderColor: !newPartnerGroup ? 'var(--red)' : '#9c27b055',
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Select group\u2026"), playGroups.map(s => /*#__PURE__*/React.createElement("option", {
+    key: s.id,
+    value: s.id
+  }, s.name))), matchMode === 'OP Meet' && /*#__PURE__*/React.createElement("select", {
+    value: newPartnerTeam,
+    onChange: e => setNewPartnerTeam(e.target.value),
+    style: {
+      borderColor: !newPartnerTeam ? 'var(--red)' : '#9c27b055',
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Select team\u2026"), teams.map(t => /*#__PURE__*/React.createElement("option", {
+    key: t.id,
+    value: t.id
+  }, t.name))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 6,
@@ -1230,9 +1504,653 @@ function normalizeCourts(savedCourts, fallbackNumCourts) {
   });
 }
 
+// ── OP Multi Group: manage named groups, each with its own courts ─────────
+function GroupListTab({
+  playGroups,
+  setPlayGroups,
+  courts,
+  setCourts,
+  showNotif
+}) {
+  const [editId, setEditId] = useState(null);
+  const [name, setName] = useState('');
+  const [courtIds, setCourtIds] = useState([]);
+  const resetForm = () => {
+    setEditId(null);
+    setName('');
+    setCourtIds([]);
+  };
+  const toggleCourtId = id => {
+    const takenBy = playGroups.find(s => s.id !== editId && (s.courtIds || []).includes(id));
+    if (takenBy && !courtIds.includes(id)) {
+      showNotif(`Court ${id} is already assigned to "${takenBy.name}"`);
+      return;
+    }
+    setCourtIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+  const saveGroup = () => {
+    if (!name.trim()) {
+      showNotif('Enter a group name');
+      return;
+    }
+    if (!courtIds.length) {
+      showNotif('Assign at least one court to this group');
+      return;
+    }
+    const conflict = courtIds.find(id => playGroups.some(s => s.id !== editId && (s.courtIds || []).includes(id)));
+    if (conflict) {
+      showNotif(`Court ${conflict} is already assigned to another group`);
+      return;
+    }
+    if (editId) {
+      setPlayGroups(prev => prev.map(s => s.id === editId ? { ...s, name: name.trim(), courtIds } : s));
+      showNotif(`Session "${name.trim()}" updated!`);
+    } else {
+      setPlayGroups(prev => [...prev, { id: uid(), name: name.trim(), courtIds }]);
+      showNotif(`Session "${name.trim()}" added!`);
+    }
+    // Auto-enable any courts assigned to a session so they're immediately usable
+    setCourts(prev => prev.map(c => courtIds.includes(c.id) ? { ...c, enabled: true } : c));
+    resetForm();
+  };
+  const editGroup = s => {
+    setEditId(s.id);
+    setName(s.name);
+    setCourtIds(s.courtIds || []);
+  };
+  const removeGroup = id => {
+    setPlayGroups(prev => prev.filter(s => s.id !== id));
+    if (editId === id) resetForm();
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "two-col"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-title"
+  }, `Groups (${playGroups.length})`), playGroups.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "empty-state"
+  }, "No groups yet. Add one \u2192") : /*#__PURE__*/React.createElement("div", {
+    className: "queue-list"
+  }, playGroups.map(s => /*#__PURE__*/React.createElement("div", {
+    key: s.id,
+    className: "queue-item"
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      flex: 1
+    }
+  }, "\uD83C\uDFDF ", s.name), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text-muted)',
+      marginRight: 8
+    }
+  }, "Courts: ", (s.courtIds || []).join(', ') || '—'), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: () => editGroup(s),
+    title: "Edit"
+  }, "\u270F\uFE0F"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    style: {
+      color: 'var(--red)'
+    },
+    onClick: () => removeGroup(s.id),
+    title: "Remove"
+  }, "\u2715"))))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-title"
+  }, editId ? 'Edit Group' : 'Add Group'), /*#__PURE__*/React.createElement("input", {
+    placeholder: "Group Name",
+    value: name,
+    onChange: e => setName(e.target.value),
+    onKeyDown: e => e.key === 'Enter' && saveGroup(),
+    style: {
+      marginBottom: 10
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: 'var(--text-muted)',
+      fontWeight: 700,
+      marginBottom: 6,
+      textTransform: 'uppercase',
+      letterSpacing: .5
+    }
+  }, "Assign Courts (select multiple)"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginBottom: 12
+    }
+  }, [1, 2, 3, 4, 5, 6, 7].map(n => {
+    const takenBy = playGroups.find(s => s.id !== editId && (s.courtIds || []).includes(n));
+    return /*#__PURE__*/React.createElement("button", {
+      key: n,
+      type: "button",
+      disabled: !!takenBy,
+      onClick: () => toggleCourtId(n),
+      title: takenBy ? `Already assigned to "${takenBy.name}"` : undefined,
+      style: {
+        padding: '6px 12px',
+        borderRadius: 6,
+        border: `1px solid ${courtIds.includes(n) ? 'var(--teal)' : takenBy ? 'var(--red)' : 'var(--border)'}`,
+        background: courtIds.includes(n) ? 'var(--teal-dim, rgba(0,150,150,0.15))' : takenBy ? 'rgba(255,0,0,0.08)' : 'transparent',
+        color: courtIds.includes(n) ? 'var(--teal)' : takenBy ? 'var(--red)' : 'var(--text-muted)',
+        fontWeight: 700,
+        cursor: takenBy ? 'not-allowed' : 'pointer',
+        opacity: takenBy ? 0.6 : 1
+      }
+    }, "Court ", n, takenBy ? ` (${takenBy.name})` : '');
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-green",
+    style: {
+      flex: 1
+    },
+    onClick: saveGroup
+  }, editId ? 'Save Changes' : 'Add Group'), editId && /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost",
+    onClick: resetForm
+  }, "Cancel"))));
+}
+
+// ── OP Meet: manage named teams (players tagged to a team) ─────────────────
+function TeamListTab({
+  teams,
+  setTeams,
+  showNotif
+}) {
+  const [editId, setEditId] = useState(null);
+  const [name, setName] = useState('');
+  const resetForm = () => {
+    setEditId(null);
+    setName('');
+  };
+  const saveTeam = () => {
+    if (!name.trim()) {
+      showNotif('Enter a team name');
+      return;
+    }
+    if (editId) {
+      setTeams(prev => prev.map(t => t.id === editId ? { ...t, name: name.trim() } : t));
+      showNotif(`Team "${name.trim()}" updated!`);
+    } else {
+      setTeams(prev => [...prev, { id: uid(), name: name.trim() }]);
+      showNotif(`Team "${name.trim()}" added!`);
+    }
+    resetForm();
+  };
+  const editTeam = t => {
+    setEditId(t.id);
+    setName(t.name);
+  };
+  const removeTeam = id => {
+    setTeams(prev => prev.filter(t => t.id !== id));
+    if (editId === id) resetForm();
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "two-col"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-title"
+  }, `Teams (${teams.length})`), teams.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "empty-state"
+  }, "No teams yet. Add one \u2192") : /*#__PURE__*/React.createElement("div", {
+    className: "queue-list"
+  }, teams.map(t => /*#__PURE__*/React.createElement("div", {
+    key: t.id,
+    className: "queue-item"
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      flex: 1
+    }
+  }, "\uD83E\uDD1D ", t.name), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: () => editTeam(t),
+    title: "Edit"
+  }, "\u270F\uFE0F"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    style: {
+      color: 'var(--red)'
+    },
+    onClick: () => removeTeam(t.id),
+    title: "Remove"
+  }, "\u2715"))))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-title"
+  }, editId ? 'Edit Team' : 'Add Team'), /*#__PURE__*/React.createElement("input", {
+    placeholder: "Team Name",
+    value: name,
+    onChange: e => setName(e.target.value),
+    onKeyDown: e => e.key === 'Enter' && saveTeam(),
+    style: {
+      marginBottom: 10
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-green",
+    style: {
+      flex: 1
+    },
+    onClick: saveTeam
+  }, editId ? 'Save Changes' : 'Add Team'), editId && /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost",
+    onClick: resetForm
+  }, "Cancel"))));
+}
+
+// ── PIN login screen — blocks the whole app until a valid PIN is entered ───
+function PinLoginScreen({
+  onLogin,
+  users
+}) {
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState('');
+  const [checking, setChecking] = useState(false);
+  const submit = pinValue => {
+    if (!pinValue) return;
+    setError('');
+    const hash = simpleHash(pinValue);
+    if (hash === SUPERADMIN_PIN_HASH) {
+      onLogin({ id: 'superadmin', name: 'Superadmin', role: 'Superadmin' });
+      return;
+    }
+    const match = users.find(u => u.pinHash === hash);
+    if (match) {
+      if (match.enabled === false) {
+        setError(`${match.name}'s account is disabled`);
+        setPin('');
+        return;
+      }
+      onLogin({ id: match.id, name: match.name, role: match.role });
+      return;
+    }
+    setError('Incorrect PIN');
+    setPin('');
+  };
+  const press = digit => {
+    if (checking) return;
+    const next = (pin + digit).slice(0, 6);
+    setPin(next);
+    setError('');
+  };
+  const backspace = () => {
+    if (checking) return;
+    setPin(pin.slice(0, -1));
+    setError('');
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'fixed',
+      inset: 0,
+      background: 'var(--bg, #0b0f14)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 9999,
+      gap: 20,
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 40
+    }
+  }, "🏓"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 20,
+      fontWeight: 800,
+      color: 'var(--text-main, #fff)'
+    }
+  }, "Enter PIN"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 12,
+      minHeight: 20
+    }
+  }, [0, 1, 2, 3, 4, 5].map(i => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      width: 16,
+      height: 16,
+      borderRadius: '50%',
+      border: '2px solid var(--teal, #14b8a6)',
+      background: i < pin.length ? 'var(--teal, #14b8a6)' : 'transparent'
+    }
+  }))), error && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: 'var(--red, #ef4444)',
+      fontSize: 13,
+      fontWeight: 700
+    }
+  }, error), checking && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: 'var(--text-muted, #888)',
+      fontSize: 12
+    }
+  }, "Checking\u2026"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(3, 64px)',
+      gap: 10
+    }
+  }, ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '\u232B'].map((k, i) => k === '' ? /*#__PURE__*/React.createElement("div", {
+    key: i
+  }) : /*#__PURE__*/React.createElement("button", {
+    key: i,
+    onClick: () => k === '\u232B' ? backspace() : press(k),
+    style: {
+      width: 64,
+      height: 64,
+      borderRadius: '50%',
+      border: '1px solid var(--border, #333)',
+      background: 'var(--surface2, #1a1f26)',
+      color: 'var(--text-main, #fff)',
+      fontSize: 20,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, k))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => submit(pin),
+    disabled: !pin || checking,
+    style: {
+      marginTop: 8,
+      padding: '10px 28px',
+      borderRadius: 8,
+      border: 'none',
+      background: !pin || checking ? 'var(--surface3, #2a2f36)' : 'var(--teal, #14b8a6)',
+      color: !pin || checking ? 'var(--text-muted, #888)' : '#fff',
+      fontSize: 14,
+      fontWeight: 800,
+      cursor: !pin || checking ? 'not-allowed' : 'pointer'
+    }
+  }, "Unlock"));
+}
+
+// ── User Management (Superadmin only) — add/edit/remove PIN-based users ───
+function UserManagementTab({
+  users,
+  showNotif
+}) {
+  const [editId, setEditId] = useState(null);
+  const [name, setName] = useState('');
+  const [pin, setPin] = useState('');
+  const [role, setRole] = useState('Staff');
+  const resetForm = () => {
+    setEditId(null);
+    setName('');
+    setPin('');
+    setRole('Staff');
+  };
+  const saveUser = () => {
+    if (!name.trim()) {
+      showNotif('Enter a name');
+      return;
+    }
+    if (!window.fbUsers) {
+      showNotif('Still connecting to the database — try again in a moment');
+      return;
+    }
+    let hash = null;
+    if (pin || !editId) {
+      if (!/^\d{4,6}$/.test(pin)) {
+        showNotif('PIN must be 4–6 digits');
+        return;
+      }
+      hash = simpleHash(pin);
+      if (hash === SUPERADMIN_PIN_HASH) {
+        showNotif('That PIN is reserved for Superadmin — choose a different one');
+        return;
+      }
+      const conflict = users.find(u => u.id !== editId && u.pinHash === hash);
+      if (conflict) {
+        showNotif(`That PIN is already used by "${conflict.name}"`);
+        return;
+      }
+    }
+    if (editId) {
+      const existing = users.find(u => u.id === editId);
+      window.fbUsers.upsert({ ...existing, id: editId, name: name.trim(), role, ...(hash ? { pinHash: hash } : {}) });
+      showNotif(`User "${name.trim()}" updated!`);
+    } else {
+      window.fbUsers.upsert({ id: uid(), name: name.trim(), pinHash: hash, role, enabled: true });
+      showNotif(`User "${name.trim()}" added!`);
+    }
+    resetForm();
+  };
+  const toggleUserEnabled = u => {
+    if (!window.fbUsers) {
+      showNotif('Still connecting to the database — try again in a moment');
+      return;
+    }
+    window.fbUsers.upsert({ ...u, enabled: !(u.enabled !== false) });
+    showNotif(`${u.name} ${u.enabled === false ? 'enabled' : 'disabled'}!`);
+  };
+  const editUser = u => {
+    setEditId(u.id);
+    setName(u.name);
+    setPin('');
+    setRole(u.role);
+  };
+  const removeUser = id => {
+    if (!window.fbUsers) {
+      showNotif('Still connecting to the database — try again in a moment');
+      return;
+    }
+    window.fbUsers.remove(id);
+    if (editId === id) resetForm();
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "two-col"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-title"
+  }, `Users (${users.length})`), /*#__PURE__*/React.createElement("div", {
+    className: "queue-item",
+    style: {
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      flex: 1
+    }
+  }, "\uD83D\uDD11 Superadmin"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: 'var(--text-muted)'
+    }
+  }, "Built-in \u00B7 PIN fixed")), users.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "empty-state"
+  }, "No additional users yet. Add one \u2192") : /*#__PURE__*/React.createElement("div", {
+    className: "queue-list"
+  }, users.map(u => {
+    const isEnabled = u.enabled !== false;
+    return /*#__PURE__*/React.createElement("div", {
+    key: u.id,
+    className: "queue-item",
+    style: {
+      opacity: isEnabled ? 1 : 0.55
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      flex: 1
+    }
+  }, "\uD83D\uDC64 ", u.name), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 800,
+      color: 'var(--blue)',
+      background: 'var(--blue-dim)',
+      borderRadius: 10,
+      padding: '1px 6px',
+      marginRight: 6
+    }
+  }, u.role), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 800,
+      color: isEnabled ? 'var(--green)' : 'var(--red)',
+      background: isEnabled ? 'var(--green-dim)' : 'rgba(255,0,0,0.12)',
+      borderRadius: 10,
+      padding: '1px 6px',
+      marginRight: 6
+    }
+  }, isEnabled ? 'Enabled' : 'Disabled'), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: () => toggleUserEnabled(u),
+    title: isEnabled ? 'Disable this user' : 'Enable this user',
+    style: {
+      color: isEnabled ? 'var(--orange)' : 'var(--green)'
+    }
+  }, isEnabled ? '\u23F8 Disable' : '\u25B6 Enable'), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: () => editUser(u),
+    title: "Edit"
+  }, "\u270F\uFE0F"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    style: {
+      color: 'var(--red)'
+    },
+    onClick: () => removeUser(u.id),
+    title: "Remove"
+  }, "\u2715"));
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-title"
+  }, editId ? 'Edit User' : 'Add User'), /*#__PURE__*/React.createElement("input", {
+    placeholder: "Name",
+    value: name,
+    onChange: e => setName(e.target.value),
+    style: {
+      marginBottom: 10
+    }
+  }), /*#__PURE__*/React.createElement("input", {
+    placeholder: editId ? "New PIN (leave blank to view unchanged)" : "PIN (4\u20136 digits)",
+    value: pin,
+    onChange: e => setPin(e.target.value.replace(/\D/g, '').slice(0, 6)),
+    inputMode: "numeric",
+    style: {
+      marginBottom: 10
+    }
+  }), /*#__PURE__*/React.createElement("select", {
+    value: role,
+    onChange: e => setRole(e.target.value),
+    style: {
+      marginBottom: 10
+    }
+  }, ['Admin', 'Staff'].map(r => /*#__PURE__*/React.createElement("option", {
+    key: r,
+    value: r
+  }, r))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-green",
+    style: {
+      flex: 1
+    },
+    onClick: saveUser
+  }, editId ? 'Save Changes' : 'Add User'), editId && /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost",
+    onClick: resetForm
+  }, "Cancel"))));
+}
+
 function App() {
+  // ── PIN auth: current logged-in user + the editable users list. Users
+  // persist independently of session data (dr_op_users) so they survive
+  // "Start New Session" resets; the login itself persists too (dr_op_auth)
+  // so staff aren't asked to re-enter their PIN on every page refresh.
+  const [authUser, setAuthUser] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('dr_op_auth')) || null;
+    } catch {
+      return null;
+    }
+  });
+  const [users, setUsers] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('dr_op_users')) || [];
+    } catch {
+      return [];
+    }
+  });
+  // Firestore is the source of truth for users; localStorage is just a
+  // cache so login still works instantly (and offline) using last-synced
+  // data. Retries waiting for window.fbUsers in case the Firebase module
+  // script hasn't finished executing yet when this effect first runs.
+  useEffect(() => {
+    let unsub = null;
+    let cancelled = false;
+    const trySubscribe = () => {
+      if (cancelled) return;
+      if (!window.fbUsers) {
+        setTimeout(trySubscribe, 100);
+        return;
+      }
+      unsub = window.fbUsers.subscribe(list => {
+        setUsers(list);
+        try {
+          localStorage.setItem('dr_op_users', JSON.stringify(list));
+        } catch {}
+      });
+    };
+    trySubscribe();
+    return () => {
+      cancelled = true;
+      if (unsub) unsub();
+    };
+  }, []);
+  const login = user => {
+    setAuthUser(user);
+    try {
+      localStorage.setItem('dr_op_auth', JSON.stringify(user));
+    } catch {}
+  };
+  const logout = () => {
+    setAuthUser(null);
+    try {
+      localStorage.removeItem('dr_op_auth');
+    } catch {}
+  };
+  // If Superadmin disables (or removes) the currently logged-in user while
+  // the app is open, kick them out immediately rather than waiting for
+  // their next action or page refresh.
+  useEffect(() => {
+    if (!authUser || authUser.role === 'Superadmin') return;
+    const current = users.find(u => u.id === authUser.id);
+    if (!current || current.enabled === false) {
+      logout();
+    }
+  }, [users]);
   const [gameTime, setGameTime] = useState(() => loadLiveState()?.gameTime ?? 20);
   const [matchMode, setMatchMode] = useState(() => loadLiveState()?.matchMode ?? 'Same Level');
+  // Remembers the last selected dropdown mode (Same Level / Skill Based / Open Level)
+  // so toggling Manual off restores it instead of defaulting back to Same Level.
+  const [lastDropdownMode, setLastDropdownMode] = useState(() => {
+    const saved = loadLiveState()?.matchMode;
+    return saved && saved !== 'Manual' ? saved : 'Same Level';
+  });
   // Open Level: when on (default), the algorithm forces a mixed-doubles round
   // after 2 consecutive same-gender rounds. When off, it never forces mixed —
   // gender composition is left entirely to whatever combo scores best.
@@ -1256,6 +2174,15 @@ function App() {
   const [newPartnerLevel, setNewPartnerLevel] = useState('Open');
   const [newPartnerGender, setNewPartnerGender] = useState('M');
   const [addingPair, setAddingPair] = useState(false);
+  // OP Multi Group: named groups, each with its own assigned courts.
+  // Players tagged to a group only play against others in that same group.
+  const [playGroups, setPlayGroups] = useState(() => loadLiveState()?.playGroups ?? []); // [{ id, name, courtIds: [] }]
+  const [newGroup, setNewGroup] = useState('');
+  const [newPartnerGroup, setNewPartnerGroup] = useState('');
+  // OP Meet: named teams. Partners must share a team; opponents must not.
+  const [teams, setTeams] = useState(() => loadLiveState()?.teams ?? []); // [{ id, name }]
+  const [newTeam, setNewTeam] = useState('');
+  const [newPartnerTeam, setNewPartnerTeam] = useState('');
   const [scoreModal, setScoreModal] = useState(null);
   const [scoringEnabled, setScoringEnabled] = useState(false);
   const [winLoseEnabled, setWinLoseEnabled] = useState(false);
@@ -1282,6 +2209,11 @@ function App() {
   const [manualSelected, setManualSelected] = useState([]);
   const [manualCourt, setManualCourt] = useState(null);
   const [waitlistSearch, setWaitlistSearch] = useState('');
+  // OP Multi Group: which group's sub-tab is active in the Waitlist tab.
+  // null = "All" (no filtering).
+  const [waitlistGroupFilter, setWaitlistGroupFilter] = useState(null);
+  // OP Meet: which team's sub-tab is active in the Waitlist tab. null = "All".
+  const [waitlistTeamFilter, setWaitlistTeamFilter] = useState(null);
   const [playerListSearch, setPlayerListSearch] = useState('');
   const [playerList, setPlayerList] = useState(() => loadLiveState()?.playerList ?? INIT_PLAYERS.map(p => ({
     ...p
@@ -1312,6 +2244,10 @@ function App() {
     col: 'wins',
     dir: 'desc'
   });
+  // Group/Team sub-tab filter for Player Stats (also scopes the Rank List
+  // sent to the preview screen).
+  const [statsGroupFilter, setStatsGroupFilter] = useState(null);
+  const [statsTeamFilter, setStatsTeamFilter] = useState(null);
   const [queueSort, setQueueSort] = useState({
     col: null,
     dir: 'asc'
@@ -1474,10 +2410,12 @@ function App() {
         courts,
         history,
         playerList,
-        requestedGames
+        requestedGames,
+        playGroups,
+        teams
       }));
     } catch {}
-  }, [numCourts, gameTime, matchMode, queue, courts, history, playerList, requestedGames]);
+  }, [numCourts, gameTime, matchMode, queue, courts, history, playerList, requestedGames, playGroups, teams]);
 
   // ── Pair-link modal (set/remove fixed partner on existing players) ───
   const [pairModal, setPairModal] = useState(null); // null | { playerId }
@@ -1607,7 +2545,7 @@ function App() {
       simAssignCount += 1;
       let forceMixed = false;
       if (matchMode === 'Same Level') forceMixed = simAssignCount % 3 === 0;
-      if (matchMode === 'Open Level') forceMixed = forceMixedEnabled && simOlStreak >= 2;
+      if (matchMode === 'Open Level' || matchMode === 'OP Multi Group' || matchMode === 'OP Meet') forceMixed = forceMixedEnabled && simOlStreak >= 2;
       if (matchMode === 'Skill Based') {
         simSbMixedCount += 1;
         forceMixed = simSbMixedCount % 3 === 0;
@@ -1995,14 +2933,41 @@ function App() {
   </div>
 </div>
 
+<!-- Top Team Performer celebratory overlay (OP Meet) — triggered via postMessage from main app -->
+<div id="topperf-team-overlay" class="tp-overlay">
+  <div class="tp-card">
+    <div class="tp-kicker">🏆 Top Team Performer</div>
+    <div class="tp-trophy">🏆</div>
+    <div class="tp-name" id="tpteam-name">—</div>
+    <div class="tp-sub" id="tpteam-sub"></div>
+    <div class="tp-stats-row">
+      <div class="tp-stat tp-wins"><div class="val" id="tpteam-wins">0</div><div class="lbl">Wins</div></div>
+      <div class="tp-stat"><div class="val" id="tpteam-games">0</div><div class="lbl">Games</div></div>
+      <div class="tp-stat"><div class="val" id="tpteam-winrate">0%</div><div class="lbl">Win Rate</div></div>
+    </div>
+    <button class="tp-close-btn" onclick="closeTopTeamPerformer()">Nice!</button>
+  </div>
+</div>
+
 <!-- Rank List preview overlay — triggered via postMessage from main app -->
 <div id="ranklist-overlay" class="tp-overlay">
   <div class="rank-list-modal">
     <div class="rank-list-header">
-      <div class="rank-list-title">📋 Rank List — Wins</div>
+      <div class="rank-list-title" id="rank-list-title">📋 Rank List — Wins</div>
       <button class="rank-list-close-btn" onclick="closeRankList()">Close</button>
     </div>
     <div class="rank-list-body" id="rank-list-body"></div>
+  </div>
+</div>
+
+<!-- Rank List Team preview overlay (OP Meet) — triggered via postMessage from main app -->
+<div id="ranklist-team-overlay" class="tp-overlay">
+  <div class="rank-list-modal">
+    <div class="rank-list-header">
+      <div class="rank-list-title">📋 Rank List — Team Wins</div>
+      <button class="rank-list-close-btn" onclick="closeRankListTeam()">Close</button>
+    </div>
+    <div class="rank-list-body" id="rank-list-team-body"></div>
   </div>
 </div>
 
@@ -2174,11 +3139,46 @@ window.addEventListener('message', (e) => {
     } catch(err) {}
   }
 
+  // ── Top Team Performer celebratory overlay (OP Meet) ───────────────
+  if (e.data && e.data.type === 'DR_TOP_TEAM_PERFORMER') {
+    try {
+      const tp = e.data.topTeamPerformer;
+      const card = document.querySelector('#topperf-team-overlay .tp-card');
+      card.querySelectorAll('.confetti-piece').forEach(el => el.remove());
+      const emojis = ['🎉','✨','🎊','🏓','⭐','🎉','✨','🏓'];
+      emojis.forEach((em, i) => {
+        const span = document.createElement('span');
+        span.className = 'confetti-piece';
+        span.textContent = em;
+        span.style.left = (i * 12 % 100) + '%';
+        span.style.animationDuration = (2.4 + i % 4 * 0.6) + 's';
+        span.style.animationDelay = (i * 0.3) + 's';
+        card.insertBefore(span, card.firstChild);
+      });
+      if (!tp) {
+        document.getElementById('tpteam-name').textContent = 'No games yet';
+        document.getElementById('tpteam-sub').textContent = 'Complete a game to crown a Top Team Performer';
+        document.getElementById('tpteam-wins').textContent = '0';
+        document.getElementById('tpteam-games').textContent = '0';
+        document.getElementById('tpteam-winrate').textContent = '0%';
+      } else {
+        document.getElementById('tpteam-name').textContent = '🤝 ' + tp.name;
+        document.getElementById('tpteam-sub').textContent = tp.playerCount + (tp.playerCount === 1 ? ' player' : ' players');
+        document.getElementById('tpteam-wins').textContent = tp.wins;
+        document.getElementById('tpteam-games').textContent = tp.games;
+        document.getElementById('tpteam-winrate').textContent = tp.games ? Math.round(tp.wins / tp.games * 100) + '%' : '0%';
+      }
+      document.getElementById('topperf-team-overlay').classList.add('visible');
+    } catch(err) {}
+  }
+
   // ── Rank List preview overlay ────────────────────────────────────
   if (e.data && e.data.type === 'DR_RANK_LIST') {
     try {
       const players = e.data.rankedPlayers || [];
       const body = document.getElementById('rank-list-body');
+      const titleEl = document.getElementById('rank-list-title');
+      if (titleEl) titleEl.textContent = e.data.label ? ('📋 Rank List — Wins (' + e.data.label + ')') : '📋 Rank List — Wins';
       if (!players.length) {
         body.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:28px 0;">Complete games to build the rank list!</div>';
       } else {
@@ -2196,6 +3196,25 @@ window.addEventListener('message', (e) => {
       }
     } catch(err) {}
   }
+
+  // ── Rank List Team preview overlay (OP Meet) ───────────────────────
+  if (e.data && e.data.type === 'DR_RANK_LIST_TEAM') {
+    try {
+      const teamsList = e.data.rankedTeams || [];
+      const body = document.getElementById('rank-list-team-body');
+      if (!teamsList.length) {
+        body.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:28px 0;">Complete games to build the team rank list!</div>';
+      } else {
+        body.innerHTML = teamsList.map((t, i) => {
+          const cls = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : '';
+          return '<div class="rank-row"><div class="rank-num ' + cls + '">' + (i + 1) + '</div><div class="rank-name">🤝 ' + t.name + '</div><div class="rank-wins">' + t.wins + ' win' + (t.wins === 1 ? '' : 's') + '</div></div>';
+        }).join('');
+      }
+      if (e.data.show !== false) {
+        document.getElementById('ranklist-team-overlay').classList.add('visible');
+      }
+    } catch(err) {}
+  }
 });
 
 function closeAlert() {
@@ -2209,10 +3228,32 @@ function closeTopPerformer() {
   if (overlay) overlay.classList.remove('visible');
 }
 
+function closeTopTeamPerformer() {
+  const overlay = document.getElementById('topperf-team-overlay');
+  if (overlay) overlay.classList.remove('visible');
+}
+
 function closeRankList() {
   const overlay = document.getElementById('ranklist-overlay');
   if (overlay) overlay.classList.remove('visible');
 }
+
+function closeRankListTeam() {
+  const overlay = document.getElementById('ranklist-team-overlay');
+  if (overlay) overlay.classList.remove('visible');
+}
+
+// Esc closes whichever popup/overlay is currently open on the preview screen.
+// Calling every close function is safe even if a given overlay isn't open —
+// each one just removes a class that's already absent.
+window.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' && e.key !== 'Esc') return;
+  closeAlert();
+  closeTopPerformer();
+  closeTopTeamPerformer();
+  closeRankList();
+  closeRankListTeam();
+});
 
 // Ask parent for data on load
 window.addEventListener('load', () => {
@@ -2232,6 +3273,8 @@ renderCourts();
     matchMode,
     queue,
     history,
+    playGroups,
+    teams,
     courts: courts.map(c => ({
       ...c,
       startTime: c.startTime ? c.startTime : null
@@ -2258,6 +3301,8 @@ renderCourts();
     setMatchMode(snap.matchMode);
     setQueue(snap.queue || []);
     setHistory(snap.history || []);
+    setPlayGroups(snap.playGroups || []);
+    setTeams(snap.teams || []);
     setCourts(normalizeCourts(snap.courts, snap.numCourts));
     // Rebuild pairing history from saved game history so repeat-avoidance is accurate
     partnerHistory.current = {};
@@ -2341,7 +3386,7 @@ renderCourts();
   // Forbids 3M+1F, 4F alone vs 4M, or any combo where females are on same team.
   // In 'Open Level' mode this check is skipped — any gender combination is allowed.
   const genderValid = (tA, tB, mode) => {
-    if (mode === 'Open Level' || mode === 'Manual') return true; // Open Level = all levels, no gender restriction
+    if (mode === 'Open Level' || mode === 'Manual' || mode === 'OP Multi Group' || mode === 'OP Meet') return true; // Open Level = all levels, no gender restriction
     const all = [...tA, ...tB];
     const femaleCount = all.filter(p => p.gender === 'F').length;
     if (femaleCount === 0 || femaleCount === 4) return true; // all-male or all-female: OK
@@ -2353,7 +3398,7 @@ renderCourts();
   };
   const teamCompatible = (tA, tB, mode) => {
     if (!genderValid(tA, tB, mode)) return false;
-    if (mode === 'Open Level' || mode === 'Manual') return true;
+    if (mode === 'Open Level' || mode === 'Manual' || mode === 'OP Multi Group' || mode === 'OP Meet') return true;
     const all = [...tA, ...tB];
     // 'Open' level players are wildcards — ignore them in span calc
     const levels = all.filter(p => p.level !== 'Open').map(p => LEVEL_IDX[p.level]);
@@ -2555,7 +3600,7 @@ renderCourts();
     //   4. Wait priority: worst queue position in the group — players who have
     //      waited longer push their combo up. This prevents anyone getting stuck.
     //   5. Pairing + opponent freshness (new faces preferred)
-    if (mode === 'Open Level') {
+    if (mode === 'Open Level' || mode === 'OP Multi Group' || mode === 'OP Meet') {
       const pool = sorted.slice(0, 20);
       const splits = [[0, 1, 2, 3], [0, 2, 1, 3], [0, 3, 1, 2]];
 
@@ -2571,12 +3616,29 @@ renderCourts();
       // naturally surfacing groups where everyone has waited a long time.
       const worstQpos = players => worstQposIds(players.map(p => p.id));
       const bestSplitForCombo = players => {
+        // OP Multi Group: all 4 players must be tagged to the SAME group.
+        // Players without a group assigned can't be matched in this mode.
+        if (mode === 'OP Multi Group') {
+          const groupIds = players.map(p => p.group || null);
+          if (groupIds.some(s => !s) || new Set(groupIds).size !== 1) return null;
+        }
         const fc = players.filter(p => p.gender === 'F').length;
         const candidates = [];
         for (const [a, b, c, d] of splits) {
           const tA = [players[a], players[b]],
             tB = [players[c], players[d]];
           if (!partnersRespected(tA, tB, mode)) continue;
+          // OP Meet: partners (teammates) must share the same team tag, and
+          // the two teams facing off must NOT share a team tag. Players
+          // without a team assigned can't be matched in this mode.
+          if (mode === 'OP Meet') {
+            const teamOf = p => p.team || null;
+            const tAt = [teamOf(tA[0]), teamOf(tA[1])];
+            const tBt = [teamOf(tB[0]), teamOf(tB[1])];
+            if (!tAt[0] || !tAt[1] || !tBt[0] || !tBt[1]) continue;
+            if (tAt[0] !== tAt[1] || tBt[0] !== tBt[1]) continue;
+            if (tAt[0] === tBt[0]) continue;
+          }
           const fA = tA.filter(p => p.gender === 'F').length;
           const isMixed = fc === 2 && fA === 1;
           // genderOk only needs to gate fc === 2 (the only female-count where a
@@ -2822,21 +3884,46 @@ renderCourts();
       showNotif('Switch to Auto mode or use Assign Manually on a court');
       return;
     }
-    const open = targetCourtId ? courts.find(c => c.id === targetCourtId && c.enabled && !c.players) : courts.find(c => c.enabled && !c.players);
-    if (!open) {
-      showNotif('No open courts available');
-      return;
-    }
-    if (queue.length < 4) {
-      showNotif('Need at least 4 players in queue');
-      return;
+    // OP Multi Group: courts are tied to groups, so find a group that
+    // has both an open assigned court AND enough waiting players before
+    // picking a court — unlike other modes, courts aren't interchangeable.
+    let open = null;
+    let groupCtx = null;
+    let assignQueue = queue;
+    if (matchMode === 'OP Multi Group') {
+      for (const s of playGroups) {
+        const courtIds = s.courtIds || [];
+        if (!courtIds.length) continue;
+        const candidateCourt = targetCourtId ? courtIds.includes(targetCourtId) ? courts.find(c => c.id === targetCourtId && c.enabled && !c.players) : null : courts.find(c => courtIds.includes(c.id) && c.enabled && !c.players);
+        if (!candidateCourt) continue;
+        const groupQueue = queue.filter(p => p.group === s.id);
+        if (groupQueue.length < 4) continue;
+        open = candidateCourt;
+        groupCtx = s;
+        assignQueue = groupQueue;
+        break;
+      }
+      if (!open) {
+        showNotif('No open group court with 4+ waiting players in that group');
+        return;
+      }
+    } else {
+      open = targetCourtId ? courts.find(c => c.id === targetCourtId && c.enabled && !c.players) : courts.find(c => c.enabled && !c.players);
+      if (!open) {
+        showNotif('No open courts available');
+        return;
+      }
+      if (queue.length < 4) {
+        showNotif('Need at least 4 players in queue');
+        return;
+      }
     }
     assignCount.current += 1;
     let forceMixed = false;
     if (matchMode === 'Same Level') {
       forceMixed = assignCount.current % 3 === 0;
     }
-    if (matchMode === 'Open Level') {
+    if (matchMode === 'Open Level' || matchMode === 'OP Multi Group' || matchMode === 'OP Meet') {
       forceMixed = forceMixedEnabled && olSameGenderStreak.current >= 2;
     }
     if (matchMode === 'Skill Based') {
@@ -2854,6 +3941,7 @@ renderCourts();
     let firedReqId = null;
     for (const req of requestedGames) {
       if (!req.readyToFire) continue;
+      if (groupCtx && !req.playerIds.every(id => assignQueue.some(p => p.id === id))) continue;
       const positions = req.playerIds.map(id => queue.findIndex(p => p.id === id));
       if (positions.some(pos => pos === -1)) continue; // some not in queue yet
       const maxPos = Math.max(...positions);
@@ -2867,7 +3955,7 @@ renderCourts();
         break;
       }
     }
-    const match = findMatch(queue, matchMode, forceMixed, priorityIds);
+    const match = findMatch(assignQueue, matchMode, forceMixed, priorityIds);
     if (!match) {
       showNotif(`No valid match found for "${matchMode}" mode`);
       return;
@@ -2889,7 +3977,7 @@ renderCourts();
     if (firedReqId) setRequestedGames(prev => prev.filter(r => r.id !== firedReqId));
     roundsFiredRef.current += 1;
     const fCount = [...teamA, ...teamB].filter(p => p.gender === 'F').length;
-    const matchType = matchMode === 'Open Level' ? 'Open Levels' : fCount === 2 ? 'Mixed Doubles' : fCount === 4 ? "Women's Doubles" : "Men's Doubles";
+    const matchType = matchMode === 'Open Level' ? 'Open Levels' : matchMode === 'OP Multi Group' ? 'Multi Group' : matchMode === 'OP Meet' ? 'Team Meet' : fCount === 2 ? 'Mixed Doubles' : fCount === 4 ? "Women's Doubles" : "Men's Doubles";
     const reqLabel = firedReqId ? '🎯 Requested ' : '';
     showNotif(`Court ${open.id} — ${reqLabel}${matchType} started!`);
   };
@@ -2971,7 +4059,7 @@ renderCourts();
         localAssignCount += 1;
         let forceMixed = false;
         if (matchMode === 'Same Level') forceMixed = localAssignCount % 3 === 0;
-        if (matchMode === 'Open Level') forceMixed = forceMixedEnabled && localOlStreak >= 2;
+        if (matchMode === 'Open Level' || matchMode === 'OP Multi Group' || matchMode === 'OP Meet') forceMixed = forceMixedEnabled && localOlStreak >= 2;
         if (matchMode === 'Skill Based') {
           localSbMixedCount += 1;
           forceMixed = localSbMixedCount % 3 === 0;
@@ -3030,8 +4118,8 @@ renderCourts();
         [...teamA, ...teamB].forEach(p => {
           gamesPlayedRef.current[p.id] = (gamesPlayedRef.current[p.id] || 0) + 1;
         });
-        // Update Open Level gender streak
-        if (matchMode === 'Open Level') {
+        // Update Open Level gender streak (also used by OP Multi Group / OP Meet, same logic)
+        if (matchMode === 'Open Level' || matchMode === 'OP Multi Group' || matchMode === 'OP Meet') {
           const fCount = [...teamA, ...teamB].filter(p => p.gender === 'F').length;
           const isMixed = fCount === 2;
           localOlStreak = isMixed ? 0 : localOlStreak + 1;
@@ -3092,7 +4180,7 @@ renderCourts();
     setManualSelected([]);
     roundsFiredRef.current += 1;
     const fCntM = [...tA, ...tB].filter(p => p.gender === 'F').length;
-    const matchTypeM = matchMode === 'Open Level' ? 'Open Levels' : fCntM === 2 ? 'Mixed Doubles' : fCntM === 4 ? "Women's Doubles" : "Men's Doubles";
+    const matchTypeM = matchMode === 'Open Level' ? 'Open Levels' : matchMode === 'OP Multi Group' ? 'Multi Group' : matchMode === 'OP Meet' ? 'Team Meet' : fCntM === 2 ? 'Mixed Doubles' : fCntM === 4 ? "Women's Doubles" : "Men's Doubles";
     showNotif(`Court ${manualCourt} — ${matchTypeM} started!`);
   };
   const endGame = courtId => {
@@ -3242,11 +4330,25 @@ renderCourts();
     const remainingTeamA = court.players.teamA.filter(p => p.id !== outPlayerId);
     const remainingTeamB = court.players.teamB.filter(p => p.id !== outPlayerId);
 
-    // Try each queue candidate; pick lowest pairing-history score
+    // Group/Team eligibility is a hard requirement — never cross a group or
+    // team boundary, even as a fallback. Gender-match, by contrast, is only
+    // a soft preference (falls back to the first eligible candidate).
+    const teammateOut = (inTeamA ? remainingTeamA : remainingTeamB)[0];
+    const eligible = queue.filter(candidate => {
+      if (matchMode === 'OP Multi Group' && teammateOut?.group) return candidate.group === teammateOut.group;
+      if (matchMode === 'OP Meet' && teammateOut?.team) return candidate.team === teammateOut.team;
+      return true;
+    });
+    if (!eligible.length) {
+      showNotif(matchMode === 'OP Multi Group' ? 'No players from the same group in queue to auto-fill with!' : matchMode === 'OP Meet' ? 'No players from the same team in queue to auto-fill with!' : 'No players in queue to replace with!');
+      return;
+    }
+
+    // Try each eligible candidate; pick lowest pairing-history score
     // that also passes gender validation for the current mode
     let bestCandidate = null;
     let bestScore = Infinity;
-    for (const candidate of queue) {
+    for (const candidate of eligible) {
       const proposedTeamA = inTeamA ? [...remainingTeamA, candidate] : remainingTeamA;
       const proposedTeamB = inTeamA ? remainingTeamB : [...remainingTeamB, candidate];
       if (!genderValid(proposedTeamA, proposedTeamB, matchMode)) continue;
@@ -3257,8 +4359,8 @@ renderCourts();
       }
     }
 
-    // Fallback: no gender-valid candidate found, just use first in queue
-    if (!bestCandidate) bestCandidate = queue[0];
+    // Fallback: no gender-valid candidate found, use the first eligible one
+    if (!bestCandidate) bestCandidate = eligible[0];
     setCourts(prev => prev.map(c => {
       if (c.id !== courtId || !c.players) return c;
       const newTeamA = c.players.teamA.map(p => p.id === outPlayerId ? bestCandidate : p);
@@ -3302,8 +4404,8 @@ renderCourts();
     [...modalTeamA, ...modalTeamB].forEach(p => {
       gamesPlayedRef.current[p.id] = (gamesPlayedRef.current[p.id] || 0) + 1;
     });
-    // Update Open Level gender streak
-    if (matchMode === 'Open Level') {
+    // Update Open Level gender streak (also used by OP Multi Group / OP Meet, same logic)
+    if (matchMode === 'Open Level' || matchMode === 'OP Multi Group' || matchMode === 'OP Meet') {
       const fCount = [...modalTeamA, ...modalTeamB].filter(p => p.gender === 'F').length;
       const isMixed = fCount === 2;
       olSameGenderStreak.current = isMixed ? 0 : olSameGenderStreak.current + 1;
@@ -3405,6 +4507,22 @@ renderCourts();
   };
   const addPlayer = () => {
     if (!newName.trim()) return;
+    if (matchMode === 'OP Multi Group' && !newGroup) {
+      showNotif('Select a Group for this player (add one in the Group List tab first)');
+      return;
+    }
+    if (matchMode === 'OP Meet' && !newTeam) {
+      showNotif('Select a Team for this player (add one in the Team List tab first)');
+      return;
+    }
+    if (matchMode === 'OP Meet' && addingPair && !newPartnerTeam) {
+      showNotif('Select a Team for the partner too');
+      return;
+    }
+    if (matchMode === 'OP Multi Group' && addingPair && !newPartnerGroup) {
+      showNotif('Select a Group for the partner too');
+      return;
+    }
     // Check for duplicate name in queue
     const allCurrentNames = new Set([...queue.map(p => p.name.toLowerCase()), ...courts.flatMap(c => c.players ? [...c.players.teamA, ...c.players.teamB].map(p => p.name.toLowerCase()) : [])]);
     if (allCurrentNames.has(newName.trim().toLowerCase())) {
@@ -3432,6 +4550,8 @@ renderCourts();
         level: newLevel,
         gender: newGender,
         partnerId: id2,
+        group: matchMode === 'OP Multi Group' ? newGroup : null,
+        team: matchMode === 'OP Meet' ? newTeam : null,
         queuedAt: Date.now()
       };
       const p2 = {
@@ -3440,6 +4560,8 @@ renderCourts();
         level: newPartnerLevel,
         gender: newPartnerGender,
         partnerId: id1,
+        group: matchMode === 'OP Multi Group' ? newPartnerGroup : null,
+        team: matchMode === 'OP Meet' ? newPartnerTeam : null,
         queuedAt: Date.now()
       };
       // Record join round for late-arrival fairness (only set once, never overwritten)
@@ -3465,6 +4587,8 @@ renderCourts();
         level: newLevel,
         gender: newGender,
         partnerId: null,
+        group: matchMode === 'OP Multi Group' ? newGroup : null,
+        team: matchMode === 'OP Meet' ? newTeam : null,
         queuedAt: Date.now()
       };
       // Record join round for late-arrival fairness (only set once, never overwritten)
@@ -3634,9 +4758,11 @@ renderCourts();
   history.forEach(g => {
     const all = [...g.teamA.map(p => ({
       ...p,
+      opTeam: p.team,
       team: 'A'
     })), ...g.teamB.map(p => ({
       ...p,
+      opTeam: p.team,
       team: 'B'
     }))];
     all.forEach(({
@@ -3644,7 +4770,9 @@ renderCourts();
       name,
       level,
       gender,
-      team
+      team,
+      opTeam,
+      group
     }) => {
       if (!playerStats[id]) {
         // Prefer the live Player List entry; fall back to the historical
@@ -3654,6 +4782,12 @@ renderCourts();
           name: current ? current.name : name,
           level: current ? current.level : level,
           gender: current ? current.gender : gender,
+          // OP Meet team affiliation — prefer the player's CURRENT team tag
+          // (they may have been reassigned since this game was played),
+          // fall back to whatever team they were on when the game was recorded.
+          opTeam: current ? current.team || null : opTeam || null,
+          // OP Multi Group affiliation, same current-list-preferred logic.
+          group: current ? current.group || null : group || null,
           games: 0,
           wins: 0,
           pts: 0,
@@ -3674,6 +4808,60 @@ renderCourts();
     ...s
   })).sort((a, b) => b.wins - a.wins || b.games - a.games);
   const topPerformer = rankedPlayers[0] || null;
+  // OP Meet: aggregate player stats up into per-team totals (wins/games/pts
+  // are summed across every player currently tagged to that team). Powers
+  // the "Rank List Team" preview.
+  const teamStatsById = {};
+  rankedPlayers.forEach(p => {
+    if (!p.opTeam) return;
+    if (!teamStatsById[p.opTeam]) {
+      teamStatsById[p.opTeam] = {
+        games: 0,
+        wins: 0,
+        pts: 0,
+        against: 0,
+        playerCount: 0
+      };
+    }
+    const t = teamStatsById[p.opTeam];
+    t.games += p.games;
+    t.wins += p.wins;
+    t.pts += p.pts;
+    t.against += p.against;
+    t.playerCount += 1;
+  });
+  const rankedTeams = teams.map(g => ({
+    id: g.id,
+    name: g.name,
+    ...(teamStatsById[g.id] || { games: 0, wins: 0, pts: 0, against: 0, playerCount: 0 })
+  })).sort((a, b) => b.wins - a.wins || b.games - a.games);
+  const topTeamPerformer = rankedTeams.find(t => t.games > 0) || null;
+  // Scope the Rank List to whichever group/team sub-tab is selected in
+  // Player Stats. filteredRankLabel is shown in the preview overlay title
+  // so it's clear the list is scoped, not the full roster.
+  let filteredRankedPlayers = rankedPlayers;
+  let filteredRankLabel = null;
+  if (matchMode === 'OP Multi Group' && statsGroupFilter) {
+    if (statsGroupFilter === '__unassigned__') {
+      filteredRankedPlayers = rankedPlayers.filter(p => !p.group);
+      filteredRankLabel = 'No Group';
+    } else {
+      filteredRankedPlayers = rankedPlayers.filter(p => p.group === statsGroupFilter);
+      filteredRankLabel = playGroups.find(g => g.id === statsGroupFilter)?.name || null;
+    }
+  }
+  if (matchMode === 'OP Meet' && statsTeamFilter) {
+    if (statsTeamFilter === '__unassigned__') {
+      filteredRankedPlayers = rankedPlayers.filter(p => !p.opTeam);
+      filteredRankLabel = 'No Team';
+    } else {
+      filteredRankedPlayers = rankedPlayers.filter(p => p.opTeam === statsTeamFilter);
+      filteredRankLabel = teams.find(t => t.id === statsTeamFilter)?.name || null;
+    }
+  }
+  // Same filter, as [id, s] pairs — feeds the Player Stats table directly.
+  const statsIdSet = new Set(filteredRankedPlayers.map(p => p.id));
+  const statsEntries = Object.entries(playerStats).filter(([id]) => statsIdSet.has(id));
   const exportHistoryCSV = () => {
     const headers = ['#', 'Time', 'Court', 'Team A Players', 'Team A Levels', 'Score A', 'Score B', 'Team B Players', 'Team B Levels', 'Winner', 'Duration (min)'];
     const rows = [...history].reverse().map((g, i) => [history.length - i, g.time, `Court ${g.courtId}`, g.teamA.map(p => p.name).join(' & '), g.teamA.map(p => p.level).join(' & '), g.scoreA, g.scoreB, g.teamB.map(p => p.name).join(' & '), g.teamB.map(p => p.level).join(' & '), g.winner === 'tie' ? 'Tie' : `Team ${g.winner}`, g.duration]);
@@ -3735,28 +4923,55 @@ renderCourts();
     });
     showNotif('Top Performer sent to preview screen!');
   };
+  const sendTopTeamPerformerToPreview = () => {
+    sendStatsToPreview({
+      type: 'DR_TOP_TEAM_PERFORMER',
+      topTeamPerformer
+    });
+    showNotif('Top Team Performer sent to preview screen!');
+  };
   const sendRankListToPreview = () => {
     sendStatsToPreview({
       type: 'DR_RANK_LIST',
-      rankedPlayers
+      rankedPlayers: filteredRankedPlayers,
+      label: filteredRankLabel
     });
     showNotif('Rank List sent to preview screen!');
   };
+  const sendRankListTeamToPreview = () => {
+    sendStatsToPreview({
+      type: 'DR_RANK_LIST_TEAM',
+      rankedTeams
+    });
+    showNotif('Rank List Team sent to preview screen!');
+  };
   // Keep an already-open Rank List overlay live: whenever a game is recorded
-  // (history changes), silently push the refreshed tally. show:false tells
-  // the preview window to update the numbers in place without re-opening
-  // the overlay if the user had closed it.
+  // (history changes) or the group/team filter changes, silently push the
+  // refreshed tally. show:false tells the preview window to update the
+  // numbers in place without re-opening the overlay if the user had closed it.
   useEffect(() => {
     if (previewWinRef.current && !previewWinRef.current.closed) {
       try {
         previewWinRef.current.postMessage({
           type: 'DR_RANK_LIST',
-          rankedPlayers,
+          rankedPlayers: filteredRankedPlayers,
+          label: filteredRankLabel,
+          show: false
+        }, '*');
+        previewWinRef.current.postMessage({
+          type: 'DR_RANK_LIST_TEAM',
+          rankedTeams,
           show: false
         }, '*');
       } catch (e) {}
     }
-  }, [history]);
+  }, [history, statsGroupFilter, statsTeamFilter]);
+  if (!authUser) {
+    return /*#__PURE__*/React.createElement(PinLoginScreen, {
+      onLogin: login,
+      users: users
+    });
+  }
   return /*#__PURE__*/React.createElement("div", {
     className: "app"
   }, notification && /*#__PURE__*/React.createElement("div", {
@@ -3785,7 +5000,22 @@ renderCourts();
     minute: '2-digit'
   }))))), /*#__PURE__*/React.createElement("div", {
     className: "session-actions"
-  }, /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: authUser.role === 'Superadmin' ? 'var(--gold)' : 'var(--text-muted)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 4,
+      marginRight: 4
+    },
+    title: `Logged in as ${authUser.name} (${authUser.role})`
+  }, authUser.role === 'Superadmin' ? '🔑' : '👤', " ", authUser.name), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: logout,
+    title: "Lock the app and require a PIN to continue"
+  }, "🔒 Lock"), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-ghost btn-sm",
     onClick: () => setLightMode(v => !v),
     title: lightMode ? "Switch to dark mode" : "Switch to light mode"
@@ -3973,9 +5203,14 @@ renderCourts();
     className: "ctrl-label"
   }, "Courts"), [1, 2, 3, 4, 5, 6, 7].map(n => /*#__PURE__*/React.createElement("button", {
     key: n,
+    disabled: matchMode === 'OP Multi Group',
     className: `time-btn ${courts.find(c => c.id === n)?.enabled ? 'active' : ''}`,
-    title: courts.find(c => c.id === n)?.enabled ? `Turn Court ${n} off` : `Turn Court ${n} on`,
-    onClick: () => toggleCourt(n)
+    title: matchMode === 'OP Multi Group' ? 'Courts are controlled by Group List in OP Multi Group mode' : courts.find(c => c.id === n)?.enabled ? `Turn Court ${n} off` : `Turn Court ${n} on`,
+    style: matchMode === 'OP Multi Group' ? {
+      opacity: 0.4,
+      cursor: 'not-allowed'
+    } : undefined,
+    onClick: () => matchMode !== 'OP Multi Group' && toggleCourt(n)
   }, n))), /*#__PURE__*/React.createElement("div", {
     className: "divider-v"
   }), /*#__PURE__*/React.createElement("div", {
@@ -3992,11 +5227,85 @@ renderCourts();
     className: "ctrl-group"
   }, /*#__PURE__*/React.createElement("span", {
     className: "ctrl-label"
-  }, "Match Mode"), MATCH_MODES.map(m => /*#__PURE__*/React.createElement("button", {
+  }, "Match Mode"), /*#__PURE__*/React.createElement("select", {
+    value: matchMode === 'Manual' ? lastDropdownMode : matchMode,
+    disabled: matchMode === 'Manual',
+    onChange: e => {
+      const val = e.target.value;
+      setLastDropdownMode(val);
+      setMatchMode(val);
+    },
+    className: "mode-select",
+    style: {
+      background: 'var(--surface3)',
+      color: 'var(--text)',
+      border: '1px solid var(--border)',
+      borderRadius: 6,
+      padding: '5px 8px',
+      fontSize: 12,
+      fontWeight: 600,
+      cursor: matchMode === 'Manual' ? 'not-allowed' : 'pointer',
+      opacity: matchMode === 'Manual' ? 0.5 : 1
+    }
+  }, MATCH_MODES.filter(m => m !== 'Manual').map(m => /*#__PURE__*/React.createElement("option", {
     key: m,
-    className: `mode-btn ${matchMode === m ? 'active' : ''}`,
-    onClick: () => setMatchMode(m)
-  }, m))), matchMode === 'Open Level' && /*#__PURE__*/React.createElement("div", {
+    value: m
+  }, m))), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      cursor: 'pointer',
+      fontSize: 12,
+      fontWeight: 600,
+      color: matchMode === 'Manual' ? 'var(--text)' : 'var(--text-muted)',
+      marginLeft: 8,
+      whiteSpace: 'nowrap'
+    },
+    title: "Switch on to disable auto-matchmaking and assign players manually"
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      position: 'relative',
+      display: 'inline-block',
+      width: 32,
+      height: 18,
+      borderRadius: 9,
+      background: matchMode === 'Manual' ? 'var(--green)' : 'var(--surface3)',
+      border: '1px solid var(--border)',
+      transition: 'background 0.15s',
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: matchMode === 'Manual',
+    onChange: e => {
+      if (e.target.checked) {
+        setMatchMode('Manual');
+      } else {
+        setMatchMode(lastDropdownMode);
+      }
+    },
+    style: {
+      position: 'absolute',
+      opacity: 0,
+      width: '100%',
+      height: '100%',
+      margin: 0,
+      cursor: 'pointer'
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      position: 'absolute',
+      top: 1,
+      left: matchMode === 'Manual' ? 15 : 1,
+      width: 14,
+      height: 14,
+      borderRadius: '50%',
+      background: '#fff',
+      transition: 'left 0.15s',
+      boxShadow: '0 1px 2px rgba(0,0,0,0.3)'
+    }
+  })), "Manual")), (matchMode === 'Open Level' || matchMode === 'OP Multi Group' || matchMode === 'OP Meet') && /*#__PURE__*/React.createElement("div", {
     className: "ctrl-group"
   }, /*#__PURE__*/React.createElement("label", {
     style: {
@@ -4063,7 +5372,7 @@ renderCourts();
     title: "Run automated game simulation"
   }, "🧪 Test Sim")), /*#__PURE__*/React.createElement("div", {
     className: "tabbar"
-  }, [['courts', `Courts (${numCourts})`], ['queue', `Waitlist (${queue.length})`], ['playerlist', `Player List (${playerList.length})`], ['requests', `Requested (${requestedGames.length})`], ['history', `History (${history.length})`], ['stats', 'Player Stats']].map(([key, label]) => /*#__PURE__*/React.createElement("div", {
+  }, [['courts', `Courts (${numCourts})`], ['queue', `Waitlist (${queue.length})`], ['playerlist', `Player List (${playerList.length})`], ['requests', `Requested (${requestedGames.length})`], ['history', `History (${history.length})`], ['stats', 'Player Stats'], ...(matchMode === 'OP Multi Group' ? [['grouplist', `Group List (${playGroups.length})`]] : []), ...(matchMode === 'OP Meet' ? [['teamlist', `Team List (${teams.length})`]] : []), ...(authUser.role === 'Superadmin' ? [['users', `Users (${users.length})`]] : [])].map(([key, label]) => /*#__PURE__*/React.createElement("div", {
     key: key,
     className: `tab ${activeTab === key ? 'active' : ''}`,
     onClick: () => setActiveTab(key)
@@ -4078,7 +5387,24 @@ renderCourts();
     className: "court-name"
   }, /*#__PURE__*/React.createElement("span", {
     className: `court-status-dot ${court.players ? 'dot-green' : 'dot-gray'}`
-  }), "Court ", court.id), court.players ? /*#__PURE__*/React.createElement("div", {
+  }), "Court ", court.id, matchMode === 'OP Multi Group' && (() => {
+    const owner = playGroups.find(s => (s.courtIds || []).includes(court.id));
+    return owner ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        color: 'var(--teal)',
+        marginLeft: 6
+      }
+    }, "🏟 ", owner.name) : /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        color: 'var(--red)',
+        marginLeft: 6
+      }
+    }, "No group");
+  })()), court.players ? /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -4091,7 +5417,7 @@ renderCourts();
   }), (() => {
     const all = [...court.players.teamA, ...court.players.teamB];
     const fCount = all.filter(p => p.gender === 'F').length;
-    if (matchMode === 'Open Level') return /*#__PURE__*/React.createElement("span", {
+    if (matchMode === 'Open Level' || matchMode === 'OP Multi Group' || matchMode === 'OP Meet') return /*#__PURE__*/React.createElement("span", {
       style: {
         fontSize: 9,
         fontWeight: 800,
@@ -4099,7 +5425,7 @@ renderCourts();
         letterSpacing: .5,
         textTransform: 'uppercase'
       }
-    }, "⚡ Open Levels");
+    }, matchMode === 'OP Multi Group' ? '🏟 Multi Group' : matchMode === 'OP Meet' ? '🤝 Team Meet' : '⚡ Open Levels');
     if (fCount === 2) return /*#__PURE__*/React.createElement("span", {
       style: {
         fontSize: 9,
@@ -4358,7 +5684,17 @@ renderCourts();
         flexShrink: 0,
         transition: 'all 0.15s'
       }
-    }, "✕"))), isBeingReplaced && /*#__PURE__*/React.createElement("div", {
+    }, "✕"))), isBeingReplaced && (() => {
+      // Restrict substitution candidates to whoever the current mode allows:
+      // OP Multi Group requires the sub share the outgoing player's group;
+      // OP Meet requires the sub share their teammate's team.
+      const teammate = section.players.find(x => x.id !== p.id);
+      const subCandidates = queue.filter(qp => {
+        if (matchMode === 'OP Multi Group') return !teammate?.group || qp.group === teammate.group;
+        if (matchMode === 'OP Meet') return !teammate?.team || qp.team === teammate.team;
+        return true;
+      });
+      return /*#__PURE__*/React.createElement("div", {
       style: {
         background: 'var(--surface)',
         border: '1px solid var(--red)',
@@ -4384,14 +5720,14 @@ renderCourts();
         color: 'var(--orange)',
         fontWeight: 900
       }
-    }, "⚡"), " for smart auto-fill from queue"), queue.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    }, "⚡"), " for smart auto-fill from queue"), subCandidates.length === 0 ? /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 11,
         color: 'var(--text-dim)',
         textAlign: 'center',
         padding: '8px 0'
       }
-    }, "No players in queue") : /*#__PURE__*/React.createElement("div", {
+    }, matchMode === 'OP Multi Group' ? `No queued players in "${playGroups.find(g => g.id === teammate?.group)?.name || 'this group'}"` : matchMode === 'OP Meet' ? `No queued players on "${teams.find(t => t.id === teammate?.team)?.name || 'this team'}"` : "No players in queue") : /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         flexDirection: 'column',
@@ -4399,7 +5735,7 @@ renderCourts();
         maxHeight: 160,
         overflowY: 'auto'
       }
-    }, queue.map(qp => /*#__PURE__*/React.createElement("div", {
+    }, subCandidates.map(qp => /*#__PURE__*/React.createElement("div", {
       key: qp.id,
       onClick: () => replaceCourtPlayer(court.id, p.id, qp),
       style: {
@@ -4450,7 +5786,8 @@ renderCourts();
         padding: '5px',
         cursor: 'pointer'
       }
-    }, "Cancel")));
+    }, "Cancel"));
+    })());
   }))), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 9,
@@ -4699,7 +6036,7 @@ renderCourts();
       className: "courts-grid"
     }, previewMatches.map((m, idx) => {
       const fCount = [...m.teamA, ...m.teamB].filter(p => p.gender === 'F').length;
-      const matchLabel = matchMode === 'Open Level' ? '⚡ Open Levels' : fCount === 2 ? '♀♂ Mixed Doubles' : fCount === 4 ? "♀ Women's Doubles" : "♂ Men's Doubles";
+      const matchLabel = matchMode === 'Open Level' ? '⚡ Open Levels' : matchMode === 'OP Multi Group' ? '🏟 Multi Group' : matchMode === 'OP Meet' ? '🤝 Team Meet' : fCount === 2 ? '♀♂ Mixed Doubles' : fCount === 4 ? "♀ Women's Doubles" : "♂ Men's Doubles";
       return /*#__PURE__*/React.createElement("div", {
         key: idx,
         className: "court-card",
@@ -4867,7 +6204,109 @@ renderCourts();
       lineHeight: 1,
       padding: 0
     }
-  }, "✕")), queue.length === 0 ? /*#__PURE__*/React.createElement("div", {
+  }, "✕")), matchMode === 'OP Multi Group' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setWaitlistGroupFilter(null),
+    style: {
+      padding: '4px 10px',
+      borderRadius: 20,
+      border: `1px solid ${!waitlistGroupFilter ? 'var(--teal)' : 'var(--border)'}`,
+      background: !waitlistGroupFilter ? 'var(--teal-dim, rgba(0,150,150,0.15))' : 'transparent',
+      color: !waitlistGroupFilter ? 'var(--teal)' : 'var(--text-muted)',
+      fontSize: 11,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, "All (", queue.length, ")"), playGroups.map(g => {
+    const count = queue.filter(p => p.group === g.id).length;
+    return /*#__PURE__*/React.createElement("button", {
+      key: g.id,
+      onClick: () => setWaitlistGroupFilter(g.id),
+      style: {
+        padding: '4px 10px',
+        borderRadius: 20,
+        border: `1px solid ${waitlistGroupFilter === g.id ? 'var(--teal)' : 'var(--border)'}`,
+        background: waitlistGroupFilter === g.id ? 'var(--teal-dim, rgba(0,150,150,0.15))' : 'transparent',
+        color: waitlistGroupFilter === g.id ? 'var(--teal)' : 'var(--text-muted)',
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, "🏟 ", g.name, " (", count, ")");
+  }), (() => {
+    const unassignedCount = queue.filter(p => !p.group).length;
+    if (!unassignedCount) return null;
+    return /*#__PURE__*/React.createElement("button", {
+      onClick: () => setWaitlistGroupFilter('__unassigned__'),
+      style: {
+        padding: '4px 10px',
+        borderRadius: 20,
+        border: `1px solid ${waitlistGroupFilter === '__unassigned__' ? 'var(--red)' : 'var(--border)'}`,
+        background: waitlistGroupFilter === '__unassigned__' ? 'rgba(255,0,0,0.1)' : 'transparent',
+        color: waitlistGroupFilter === '__unassigned__' ? 'var(--red)' : 'var(--text-muted)',
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, "No Group (", unassignedCount, ")");
+  })()), matchMode === 'OP Meet' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setWaitlistTeamFilter(null),
+    style: {
+      padding: '4px 10px',
+      borderRadius: 20,
+      border: `1px solid ${!waitlistTeamFilter ? 'var(--purple, #9c27b0)' : 'var(--border)'}`,
+      background: !waitlistTeamFilter ? 'rgba(156,39,176,0.15)' : 'transparent',
+      color: !waitlistTeamFilter ? 'var(--purple, #9c27b0)' : 'var(--text-muted)',
+      fontSize: 11,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, "All (", queue.length, ")"), teams.map(t => {
+    const count = queue.filter(p => p.team === t.id).length;
+    return /*#__PURE__*/React.createElement("button", {
+      key: t.id,
+      onClick: () => setWaitlistTeamFilter(t.id),
+      style: {
+        padding: '4px 10px',
+        borderRadius: 20,
+        border: `1px solid ${waitlistTeamFilter === t.id ? 'var(--purple, #9c27b0)' : 'var(--border)'}`,
+        background: waitlistTeamFilter === t.id ? 'rgba(156,39,176,0.15)' : 'transparent',
+        color: waitlistTeamFilter === t.id ? 'var(--purple, #9c27b0)' : 'var(--text-muted)',
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, "🤝 ", t.name, " (", count, ")");
+  }), (() => {
+    const unassignedCount = queue.filter(p => !p.team).length;
+    if (!unassignedCount) return null;
+    return /*#__PURE__*/React.createElement("button", {
+      onClick: () => setWaitlistTeamFilter('__unassigned__'),
+      style: {
+        padding: '4px 10px',
+        borderRadius: 20,
+        border: `1px solid ${waitlistTeamFilter === '__unassigned__' ? 'var(--red)' : 'var(--border)'}`,
+        background: waitlistTeamFilter === '__unassigned__' ? 'rgba(255,0,0,0.1)' : 'transparent',
+        color: waitlistTeamFilter === '__unassigned__' ? 'var(--red)' : 'var(--text-muted)',
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, "No Team (", unassignedCount, ")");
+  })()), queue.length === 0 ? /*#__PURE__*/React.createElement("div", {
     className: "empty-state"
   }, "No players in queue. Add some below!") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -4876,7 +6315,7 @@ renderCourts();
       marginBottom: 8,
       lineHeight: 1.5
     }
-  }, "Listed in registration order — earliest arrivals get priority.", matchMode === 'Skill Based' && ' Skill Based: adjacent levels, mixed gender every 3rd game.', matchMode === 'Open Level' && ' Open Level: all skill levels, balanced teams.'), /*#__PURE__*/React.createElement("div", {
+  }, "Listed in registration order — earliest arrivals get priority.", matchMode === 'Skill Based' && ' Skill Based: adjacent levels, mixed gender every 3rd game.', matchMode === 'Open Level' && ' Open Level: all skill levels, balanced teams.', matchMode === 'OP Multi Group' && ' OP Multi Group: players only match within their assigned group.', matchMode === 'OP Meet' && ' OP Meet: partners share a team, opponents come from a different team.'), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: 'var(--text-dim)',
@@ -4941,6 +6380,12 @@ renderCourts();
     className: "queue-list"
   }, (() => {
     let filtered = queue.filter(p => !waitlistSearch.trim() || p.name.toLowerCase().includes(waitlistSearch.trim().toLowerCase()));
+    if (matchMode === 'OP Multi Group' && waitlistGroupFilter) {
+      filtered = filtered.filter(p => waitlistGroupFilter === '__unassigned__' ? !p.group : p.group === waitlistGroupFilter);
+    }
+    if (matchMode === 'OP Meet' && waitlistTeamFilter) {
+      filtered = filtered.filter(p => waitlistTeamFilter === '__unassigned__' ? !p.team : p.team === waitlistTeamFilter);
+    }
     if (queueSort.col) {
       const dir = queueSort.dir === 'asc' ? 1 : -1;
       filtered = [...filtered].sort((a, b) => {
@@ -5082,7 +6527,31 @@ renderCourts();
   }, LEVELS.map(l => /*#__PURE__*/React.createElement("option", {
     key: l,
     value: l
-  }, l))), /*#__PURE__*/React.createElement("div", {
+  }, l))), matchMode === 'OP Multi Group' && /*#__PURE__*/React.createElement("select", {
+    value: newGroup,
+    onChange: e => setNewGroup(e.target.value),
+    style: {
+      marginBottom: 6,
+      borderColor: !newGroup ? 'var(--red)' : undefined
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Select group…"), playGroups.map(s => /*#__PURE__*/React.createElement("option", {
+    key: s.id,
+    value: s.id
+  }, s.name))), matchMode === 'OP Meet' && /*#__PURE__*/React.createElement("select", {
+    value: newTeam,
+    onChange: e => setNewTeam(e.target.value),
+    style: {
+      marginBottom: 6,
+      borderColor: !newTeam ? 'var(--red)' : undefined
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Select team…"), teams.map(t => /*#__PURE__*/React.createElement("option", {
+    key: t.id,
+    value: t.id
+  }, t.name))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 6
@@ -5150,7 +6619,31 @@ renderCourts();
   }, LEVELS.map(l => /*#__PURE__*/React.createElement("option", {
     key: l,
     value: l
-  }, l))), /*#__PURE__*/React.createElement("div", {
+  }, l))), matchMode === 'OP Multi Group' && /*#__PURE__*/React.createElement("select", {
+    value: newPartnerGroup,
+    onChange: e => setNewPartnerGroup(e.target.value),
+    style: {
+      borderColor: !newPartnerGroup ? 'var(--red)' : '#9c27b055',
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Select group…"), playGroups.map(s => /*#__PURE__*/React.createElement("option", {
+    key: s.id,
+    value: s.id
+  }, s.name))), matchMode === 'OP Meet' && /*#__PURE__*/React.createElement("select", {
+    value: newPartnerTeam,
+    onChange: e => setNewPartnerTeam(e.target.value),
+    style: {
+      borderColor: !newPartnerTeam ? 'var(--red)' : '#9c27b055',
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Select team…"), teams.map(t => /*#__PURE__*/React.createElement("option", {
+    key: t.id,
+    value: t.id
+  }, t.name))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 6,
@@ -5259,6 +6752,17 @@ renderCourts();
     setNewPartnerLevel: setNewPartnerLevel,
     newPartnerGender: newPartnerGender,
     setNewPartnerGender: setNewPartnerGender,
+    matchMode: matchMode,
+    playGroups: playGroups,
+    newGroup: newGroup,
+    setNewGroup: setNewGroup,
+    newPartnerGroup: newPartnerGroup,
+    setNewPartnerGroup: setNewPartnerGroup,
+    teams: teams,
+    newTeam: newTeam,
+    setNewTeam: setNewTeam,
+    newPartnerTeam: newPartnerTeam,
+    setNewPartnerTeam: setNewPartnerTeam,
     addPlayer: addPlayer,
     onJoin: id => {
       if (joinRoundRef.current[id] === undefined) joinRoundRef.current[id] = roundsFiredRef.current;
@@ -6083,7 +7587,7 @@ renderCourts();
     style: {
       marginBottom: 0
     }
-  }, "Player Statistics — ", Object.keys(playerStats).length, " players"), Object.keys(playerStats).length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "Player Statistics — ", statsEntries.length, " players"), Object.keys(playerStats).length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 6,
@@ -6098,7 +7602,18 @@ renderCourts();
       alignItems: 'center',
       gap: 5
     }
-  }, "🏆 Top Performer"), /*#__PURE__*/React.createElement("button", {
+  }, "🏆 Top Performer"), matchMode === 'OP Meet' && /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: sendTopTeamPerformerToPreview,
+    title: "Show a celebratory Top Team Performer card on the preview screen",
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 5,
+      border: '1px solid var(--gold)',
+      color: 'var(--gold)'
+    }
+  }, "🏆 Top Team Performer"), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-ghost btn-sm",
     onClick: sendRankListToPreview,
     title: "Show the win-rank leaderboard on the preview screen",
@@ -6109,7 +7624,18 @@ renderCourts();
       border: '1px solid var(--blue)',
       color: 'var(--blue)'
     }
-  }, "📋 Rank List"), /*#__PURE__*/React.createElement("button", {
+  }, "📋 Rank List"), matchMode === 'OP Meet' && /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: sendRankListTeamToPreview,
+    title: "Show the team win-rank leaderboard on the preview screen",
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 5,
+      border: '1px solid var(--purple, #9c27b0)',
+      color: 'var(--purple, #9c27b0)'
+    }
+  }, "📋 Rank List Team"), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-ghost btn-sm",
     onClick: exportStatsCSV,
     style: {
@@ -6119,9 +7645,113 @@ renderCourts();
       border: '1px solid var(--green)',
       color: 'var(--green)'
     }
-  }, "⬇ Export CSV"))), Object.keys(playerStats).length === 0 ? /*#__PURE__*/React.createElement("div", {
+  }, "⬇ Export CSV"))), matchMode === 'OP Multi Group' && Object.keys(playerStats).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setStatsGroupFilter(null),
+    style: {
+      padding: '4px 10px',
+      borderRadius: 20,
+      border: `1px solid ${!statsGroupFilter ? 'var(--teal)' : 'var(--border)'}`,
+      background: !statsGroupFilter ? 'var(--teal-dim, rgba(0,150,150,0.15))' : 'transparent',
+      color: !statsGroupFilter ? 'var(--teal)' : 'var(--text-muted)',
+      fontSize: 11,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, "All (", rankedPlayers.length, ")"), playGroups.map(g => {
+    const count = rankedPlayers.filter(p => p.group === g.id).length;
+    return /*#__PURE__*/React.createElement("button", {
+      key: g.id,
+      onClick: () => setStatsGroupFilter(g.id),
+      style: {
+        padding: '4px 10px',
+        borderRadius: 20,
+        border: `1px solid ${statsGroupFilter === g.id ? 'var(--teal)' : 'var(--border)'}`,
+        background: statsGroupFilter === g.id ? 'var(--teal-dim, rgba(0,150,150,0.15))' : 'transparent',
+        color: statsGroupFilter === g.id ? 'var(--teal)' : 'var(--text-muted)',
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, "🏟 ", g.name, " (", count, ")");
+  }), (() => {
+    const unassignedCount = rankedPlayers.filter(p => !p.group).length;
+    if (!unassignedCount) return null;
+    return /*#__PURE__*/React.createElement("button", {
+      onClick: () => setStatsGroupFilter('__unassigned__'),
+      style: {
+        padding: '4px 10px',
+        borderRadius: 20,
+        border: `1px solid ${statsGroupFilter === '__unassigned__' ? 'var(--red)' : 'var(--border)'}`,
+        background: statsGroupFilter === '__unassigned__' ? 'rgba(255,0,0,0.1)' : 'transparent',
+        color: statsGroupFilter === '__unassigned__' ? 'var(--red)' : 'var(--text-muted)',
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, "No Group (", unassignedCount, ")");
+  })()), matchMode === 'OP Meet' && Object.keys(playerStats).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setStatsTeamFilter(null),
+    style: {
+      padding: '4px 10px',
+      borderRadius: 20,
+      border: `1px solid ${!statsTeamFilter ? 'var(--purple, #9c27b0)' : 'var(--border)'}`,
+      background: !statsTeamFilter ? 'rgba(156,39,176,0.15)' : 'transparent',
+      color: !statsTeamFilter ? 'var(--purple, #9c27b0)' : 'var(--text-muted)',
+      fontSize: 11,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, "All (", rankedPlayers.length, ")"), teams.map(t => {
+    const count = rankedPlayers.filter(p => p.opTeam === t.id).length;
+    return /*#__PURE__*/React.createElement("button", {
+      key: t.id,
+      onClick: () => setStatsTeamFilter(t.id),
+      style: {
+        padding: '4px 10px',
+        borderRadius: 20,
+        border: `1px solid ${statsTeamFilter === t.id ? 'var(--purple, #9c27b0)' : 'var(--border)'}`,
+        background: statsTeamFilter === t.id ? 'rgba(156,39,176,0.15)' : 'transparent',
+        color: statsTeamFilter === t.id ? 'var(--purple, #9c27b0)' : 'var(--text-muted)',
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, "🤝 ", t.name, " (", count, ")");
+  }), (() => {
+    const unassignedCount = rankedPlayers.filter(p => !p.opTeam).length;
+    if (!unassignedCount) return null;
+    return /*#__PURE__*/React.createElement("button", {
+      onClick: () => setStatsTeamFilter('__unassigned__'),
+      style: {
+        padding: '4px 10px',
+        borderRadius: 20,
+        border: `1px solid ${statsTeamFilter === '__unassigned__' ? 'var(--red)' : 'var(--border)'}`,
+        background: statsTeamFilter === '__unassigned__' ? 'rgba(255,0,0,0.1)' : 'transparent',
+        color: statsTeamFilter === '__unassigned__' ? 'var(--red)' : 'var(--text-muted)',
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, "No Team (", unassignedCount, ")");
+  })()), Object.keys(playerStats).length === 0 ? /*#__PURE__*/React.createElement("div", {
     className: "empty-state"
-  }, "Complete games to see player stats here!") : /*#__PURE__*/React.createElement("div", {
+  }, "Complete games to see player stats here!") : statsEntries.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "empty-state"
+  }, "No stats for this filter yet.") : /*#__PURE__*/React.createElement("div", {
     style: {
       overflowX: 'auto'
     }
@@ -6223,7 +7853,7 @@ renderCourts();
   }, label, col && /*#__PURE__*/React.createElement(SortIcon, {
     sort: statsSort,
     col: col
-  }))))), /*#__PURE__*/React.createElement("tbody", null, Object.entries(playerStats).map(([id, s]) => {
+  }))))), /*#__PURE__*/React.createElement("tbody", null, statsEntries.map(([id, s]) => {
     const losses = s.games - s.wins;
     const winPct = s.games ? Math.round(s.wins / s.games * 100) : 0;
     const diff = s.pts - s.against;
@@ -6346,7 +7976,20 @@ renderCourts();
         color: diff >= 0 ? 'var(--green)' : '#f88'
       }
     }, diff >= 0 ? '+' : '', diff));
-  }))))), sessionModal === 'new' && /*#__PURE__*/React.createElement("div", {
+  }))))), activeTab === 'grouplist' && /*#__PURE__*/React.createElement(GroupListTab, {
+    playGroups: playGroups,
+    setPlayGroups: setPlayGroups,
+    courts: courts,
+    setCourts: setCourts,
+    showNotif: showNotif
+  }), activeTab === 'teamlist' && /*#__PURE__*/React.createElement(TeamListTab, {
+    teams: teams,
+    setTeams: setTeams,
+    showNotif: showNotif
+  }), activeTab === 'users' && authUser.role === 'Superadmin' && /*#__PURE__*/React.createElement(UserManagementTab, {
+    users: users,
+    showNotif: showNotif
+  }), sessionModal === 'new' && /*#__PURE__*/React.createElement("div", {
     className: "session-modal-overlay",
     onClick: e => e.target === e.currentTarget && setSessionModal(null)
   }, /*#__PURE__*/React.createElement("div", {
