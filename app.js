@@ -45,8 +45,18 @@ function simpleHash(str) {
   }
   return hash.toString(16).padStart(8, '0');
 }
-let nextId = 200;
-const uid = () => `p${nextId++}`;
+// Ids must stay unique across page reloads/sessions, since Firestore docs
+// (users especially) persist indefinitely — a counter that resets on every
+// load (the old `nextId` scheme) would eventually hand out an id that
+// already belongs to an existing document, and .set()-ing that id silently
+// overwrites it instead of creating a new record. crypto.randomUUID() (or
+// the manual fallback below, for older browsers) avoids that entirely.
+const uid = () => {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return `p${window.crypto.randomUUID()}`;
+  }
+  return `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+};
 const INIT_PLAYERS = [{
   id: uid(),
   name: 'Alex',
@@ -3065,7 +3075,37 @@ renderCourts();
     //      waited longer push their combo up. This prevents anyone getting stuck.
     //   5. Pairing + opponent freshness (new faces preferred)
     if (mode === 'Open Level' || mode === 'OP Multi Group' || mode === 'OP Meet') {
-      const pool = sorted.slice(0, 20);
+      // Open Level has no team/group pairing constraint, so any 4 of the
+      // first 20 waiting players can almost always form a valid match —
+      // the cap keeps the combo search fast without ever blocking a game.
+      //
+      // OP Multi Group / OP Meet require specific players (same group, or
+      // matching team pairs) to co-occur in the search window. If those
+      // players happen to be spread past position 20 in a long waitlist,
+      // capping at 20 can wrongly report "no valid match" even though the
+      // waitlist has enough eligible players overall. So for these two
+      // modes we search the full queue instead — but first drop anyone
+      // whose group/team doesn't have enough members currently waiting to
+      // ever complete a valid combo, so the search stays fast regardless
+      // of how long the overall waitlist gets.
+      let pool;
+      if (mode === 'Open Level') {
+        pool = sorted.slice(0, 20);
+      } else if (mode === 'OP Multi Group') {
+        const groupCounts = {};
+        sorted.forEach(p => {
+          if (p.group) groupCounts[p.group] = (groupCounts[p.group] || 0) + 1;
+        });
+        pool = sorted.filter(p => p.group && groupCounts[p.group] >= 4);
+      } else {
+        // OP Meet: a valid match needs two teams with 2 players each, so a
+        // team needs at least 2 people waiting to ever be part of a combo.
+        const teamCounts = {};
+        sorted.forEach(p => {
+          if (p.team) teamCounts[p.team] = (teamCounts[p.team] || 0) + 1;
+        });
+        pool = sorted.filter(p => p.team && teamCounts[p.team] >= 2);
+      }
       const splits = [[0, 1, 2, 3], [0, 2, 1, 3], [0, 3, 1, 2]];
 
       const levelBalance = (tA, tB) => {
