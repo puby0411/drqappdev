@@ -1678,6 +1678,31 @@ function App() {
   const [scoreB, setScoreB] = useState('');
   const [modalTeamA, setModalTeamA] = useState([]);
   const [modalTeamB, setModalTeamB] = useState([]);
+  // Editing a score/winner on an already-completed game from the History tab.
+  const [historyEditModal, setHistoryEditModal] = useState(null);
+  const [editScoreA, setEditScoreA] = useState('');
+  const [editScoreB, setEditScoreB] = useState('');
+  const [editWinner, setEditWinner] = useState(null);
+  const openHistoryEdit = g => {
+    setHistoryEditModal(g);
+    setEditScoreA(String(g.scoreA ?? 0));
+    setEditScoreB(String(g.scoreB ?? 0));
+    setEditWinner(g.winner);
+  };
+  const submitHistoryEdit = () => {
+    if (!historyEditModal) return;
+    const sA = parseInt(editScoreA) || 0;
+    const sB = parseInt(editScoreB) || 0;
+    const winner = editWinner || (sA > sB ? 'A' : sB > sA ? 'B' : 'tie');
+    setHistory(prev => prev.map(g => g.id === historyEditModal.id ? {
+      ...g,
+      scoreA: sA,
+      scoreB: sB,
+      winner
+    } : g));
+    setHistoryEditModal(null);
+    showNotif('Game result updated!');
+  };
   const [notification, setNotification] = useState(null);
   const [activeTab, setActiveTab] = useState('courts');
   const [manualSelected, setManualSelected] = useState([]);
@@ -7032,8 +7057,11 @@ renderCourts();
       }
     }, p.name)))), /*#__PURE__*/React.createElement("td", {
       style: {
-        textAlign: 'center'
-      }
+        textAlign: 'center',
+        cursor: 'pointer'
+      },
+      title: 'Click to edit score / winner',
+      onClick: () => openHistoryEdit(g)
     }, /*#__PURE__*/React.createElement("span", {
       className: `score-display ${g.winner === 'A' ? 'win' : g.winner === 'B' ? 'lose' : ''}`
     }, g.scoreA), /*#__PURE__*/React.createElement("span", {
@@ -7043,7 +7071,13 @@ renderCourts();
       }
     }, "–"), /*#__PURE__*/React.createElement("span", {
       className: `score-display ${g.winner === 'B' ? 'win' : g.winner === 'A' ? 'lose' : ''}`
-    }, g.scoreB)), /*#__PURE__*/React.createElement("td", null, g.teamB.map(p => /*#__PURE__*/React.createElement("div", {
+    }, g.scoreB), /*#__PURE__*/React.createElement("span", {
+      style: {
+        marginLeft: 6,
+        fontSize: 10,
+        color: 'var(--text-dim)'
+      }
+    }, "✏️")), /*#__PURE__*/React.createElement("td", null, g.teamB.map(p => /*#__PURE__*/React.createElement("div", {
       key: p.id,
       style: {
         display: 'flex',
@@ -7059,7 +7093,13 @@ renderCourts();
       style: {
         fontSize: 12
       }
-    }, p.name)))), /*#__PURE__*/React.createElement("td", null, g.winner === 'tie' ? /*#__PURE__*/React.createElement("span", {
+    }, p.name)))), /*#__PURE__*/React.createElement("td", {
+      style: {
+        cursor: 'pointer'
+      },
+      title: 'Click to edit score / winner',
+      onClick: () => openHistoryEdit(g)
+    }, g.winner === 'tie' ? /*#__PURE__*/React.createElement("span", {
       style: {
         color: 'var(--gold)',
         fontWeight: 700,
@@ -7982,6 +8022,90 @@ renderCourts();
     }, "Save Score & Return Players"), /*#__PURE__*/React.createElement("button", {
       className: "btn btn-ghost",
       onClick: () => setScoreModal(null)
+    }, "Cancel"))));
+  })(), historyEditModal && (() => {
+    const g = historyEditModal;
+    return /*#__PURE__*/React.createElement("div", {
+      className: "score-modal-overlay",
+      onClick: () => setHistoryEditModal(null)
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "score-modal-inner",
+      onClick: e => e.stopPropagation()
+    }, /*#__PURE__*/React.createElement("h2", null, "✏️ Edit Result — Court ", g.courtId), /*#__PURE__*/React.createElement("p", {
+      style: {
+        color: 'var(--text-muted)',
+        fontSize: 12,
+        marginTop: 6
+      }
+    }, "Update the score and/or winner for this completed game"), /*#__PURE__*/React.createElement("div", {
+      className: "score-inputs"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "score-team"
+    }, /*#__PURE__*/React.createElement("label", null, "Team A", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: 'var(--text-main)'
+      }
+    }, g.teamA.map(p => p.name).join(' & '))), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      min: "0",
+      max: "99",
+      value: editScoreA,
+      onChange: e => {
+        const v = e.target.value;
+        setEditScoreA(v);
+        const sA = parseInt(v) || 0;
+        const sB = parseInt(editScoreB) || 0;
+        setEditWinner(sA > sB ? 'A' : sB > sA ? 'B' : 'tie');
+      },
+      placeholder: "0",
+      autoFocus: true
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "score-team"
+    }, /*#__PURE__*/React.createElement("label", null, "Team B", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: 'var(--text-main)'
+      }
+    }, g.teamB.map(p => p.name).join(' & '))), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      min: "0",
+      max: "99",
+      value: editScoreB,
+      onChange: e => {
+        const v = e.target.value;
+        setEditScoreB(v);
+        const sA = parseInt(editScoreA) || 0;
+        const sB = parseInt(v) || 0;
+        setEditWinner(sA > sB ? 'A' : sB > sA ? 'B' : 'tie');
+      },
+      placeholder: "0"
+    }))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        marginBottom: 18
+      }
+    }, ['A', 'tie', 'B'].map(w => /*#__PURE__*/React.createElement("button", {
+      key: w,
+      type: "button",
+      className: "btn btn-sm",
+      onClick: () => setEditWinner(w),
+      style: {
+        flex: 1,
+        border: editWinner === w ? '2px solid var(--gold)' : '1px solid var(--border)',
+        background: editWinner === w ? 'var(--gold-dim)' : 'var(--surface2)',
+        color: editWinner === w ? 'var(--gold)' : 'var(--text-muted)'
+      }
+    }, w === 'tie' ? 'Tie' : `Team ${w} Won`))), /*#__PURE__*/React.createElement("div", {
+      className: "modal-btns"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-green",
+      style: {
+        flex: 1
+      },
+      onClick: submitHistoryEdit
+    }, "Save Changes"), /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-ghost",
+      onClick: () => setHistoryEditModal(null)
     }, "Cancel"))));
   })());
 }
