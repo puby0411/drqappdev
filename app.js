@@ -29,7 +29,7 @@ const BADGE_CLASS = {
   'Advanced': 'badge-adv'
 };
 const TIME_OPTIONS = [15, 20, 24, 30];
-const MATCH_MODES = ['Same Level', 'Skill Based', 'Open Level', 'OP Multi Group', 'OP Meet', 'Manual'];
+const MATCH_MODES = ['Same Level', 'Skill Based', 'Open Level', 'OP Multi Group', 'OP Meet', 'Team Based', 'Manual'];
 // ── PIN authentication ──────────────────────────────────────────────────
 // The Superadmin PIN (72890) is never stored in plaintext — only its hash
 // is kept here, and every login attempt is hashed the same way before
@@ -971,10 +971,11 @@ function normalizeCourts(savedCourts, fallbackNumCourts) {
         id,
         players: existing.players ?? null,
         startTime: existing.startTime ?? null,
-        enabled: existing.enabled !== undefined ? existing.enabled : id <= n
+        enabled: existing.enabled !== undefined ? existing.enabled : id <= n,
+        rrMatchId: existing.rrMatchId ?? null
       };
     }
-    return { id, players: null, startTime: null, enabled: false };
+    return { id, players: null, startTime: null, enabled: false, rrMatchId: null };
   });
 }
 
@@ -1199,6 +1200,172 @@ function TeamListTab({
     onClick: () => removeTeam(t.id),
     title: "Remove"
   }, "\u2715"))))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-title"
+  }, editId ? 'Edit Team' : 'Add Team'), /*#__PURE__*/React.createElement("input", {
+    placeholder: "Team Name",
+    value: name,
+    onChange: e => setName(e.target.value),
+    onKeyDown: e => e.key === 'Enter' && saveTeam(),
+    style: {
+      marginBottom: 10
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-green",
+    style: {
+      flex: 1
+    },
+    onClick: saveTeam
+  }, editId ? 'Save Changes' : 'Add Team'), editId && /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost",
+    onClick: resetForm
+  }, "Cancel"))));
+}
+
+// ── Team Based mode roster tab — register whole teams (name only, no level/
+// gender) and, in Open Play sub-mode, queue them up to be auto-assigned.
+function TeamRosterTab({
+  teamRoster,
+  setTeamRoster,
+  teamQueue,
+  setTeamQueue,
+  courts,
+  teamSubMode,
+  showNotif
+}) {
+  const [editId, setEditId] = useState(null);
+  const [name, setName] = useState('');
+  const resetForm = () => {
+    setEditId(null);
+    setName('');
+  };
+  const isOnCourt = id => courts.some(c => c.players && (c.players.teamA[0]?.id === id || c.players.teamB[0]?.id === id));
+  const saveTeam = () => {
+    if (!name.trim()) {
+      showNotif('Enter a team name');
+      return;
+    }
+    if (editId) {
+      setTeamRoster(prev => prev.map(t => t.id === editId ? {
+        ...t,
+        name: name.trim()
+      } : t));
+      setTeamQueue(prev => prev.map(t => t.id === editId ? {
+        ...t,
+        name: name.trim()
+      } : t));
+      showNotif(`Team "${name.trim()}" updated!`);
+    } else {
+      if (teamRoster.some(t => t.name.toLowerCase() === name.trim().toLowerCase())) {
+        showNotif('A team with that name already exists');
+        return;
+      }
+      setTeamRoster(prev => [...prev, {
+        id: uid(),
+        name: name.trim(),
+        isTeam: true
+      }]);
+      showNotif(`Team "${name.trim()}" added!`);
+    }
+    resetForm();
+  };
+  const editTeam = t => {
+    setEditId(t.id);
+    setName(t.name);
+  };
+  const removeTeam = id => {
+    setTeamRoster(prev => prev.filter(t => t.id !== id));
+    setTeamQueue(prev => prev.filter(t => t.id !== id));
+    if (editId === id) resetForm();
+  };
+  const addToQueue = t => {
+    if (teamQueue.some(q => q.id === t.id)) {
+      showNotif(`${t.name} is already in the queue`);
+      return;
+    }
+    if (isOnCourt(t.id)) {
+      showNotif(`${t.name} is currently playing`);
+      return;
+    }
+    setTeamQueue(prev => [...prev, {
+      ...t,
+      queuedAt: Date.now()
+    }]);
+    showNotif(`${t.name} added to queue!`);
+  };
+  const removeFromQueue = id => setTeamQueue(prev => prev.filter(t => t.id !== id));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "two-col"
+  }, /*#__PURE__*/React.createElement("div", null, teamSubMode === 'Open Play' && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-title"
+  }, `Team Queue (${teamQueue.length})`), teamQueue.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "empty-state"
+  }, "No teams queued. Add teams from the roster \u2192") : /*#__PURE__*/React.createElement("div", {
+    className: "queue-list"
+  }, teamQueue.map((t, i) => /*#__PURE__*/React.createElement("div", {
+    key: t.id,
+    className: "queue-item"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "queue-num"
+  }, i + 1), /*#__PURE__*/React.createElement("span", {
+    className: "queue-name"
+  }, t.name), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    style: {
+      color: 'var(--red)'
+    },
+    onClick: () => removeFromQueue(t.id),
+    title: "Remove from queue"
+  }, "\u2715"))))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "section-title"
+  }, `Team Roster (${teamRoster.length})`), teamRoster.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "empty-state"
+  }, "No teams yet. Add one \u2192") : /*#__PURE__*/React.createElement("div", {
+    className: "queue-list"
+  }, teamRoster.map(t => {
+    const queued = teamQueue.some(q => q.id === t.id);
+    const onCourt = isOnCourt(t.id);
+    return /*#__PURE__*/React.createElement("div", {
+      key: t.id,
+      className: "queue-item"
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 700,
+        flex: 1
+      }
+    }, "\uD83C\uDFC6 ", t.name), onCourt && /*#__PURE__*/React.createElement("span", {
+      className: "badge badge-open"
+    }, "Playing"), !onCourt && queued && /*#__PURE__*/React.createElement("span", {
+      className: "badge badge-li"
+    }, "Queued"), teamSubMode === 'Open Play' && !onCourt && !queued && /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-blue btn-sm",
+      onClick: () => addToQueue(t)
+    }, "+ Queue"), /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-ghost btn-sm",
+      onClick: () => editTeam(t),
+      title: "Edit"
+    }, "\u270F\uFE0F"), /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-ghost btn-sm",
+      style: {
+        color: 'var(--red)'
+      },
+      onClick: () => removeTeam(t.id),
+      title: "Remove"
+    }, "\u2715"));
+  })))), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "section-title"
@@ -1657,6 +1824,15 @@ function App() {
   const [teams, setTeams] = useState(() => loadLiveState()?.teams ?? []); // [{ id, name }]
   const [newTeam, setNewTeam] = useState('');
   const [newPartnerTeam, setNewPartnerTeam] = useState('');
+  // ── Team Based mode: whole teams (not individual players) play each other.
+  // Registration only needs a team name; matches are Team A vs Team B.
+  const [teamRoster, setTeamRoster] = useState(() => loadLiveState()?.teamRoster ?? []); // [{ id, name }]
+  const [teamQueue, setTeamQueue] = useState(() => loadLiveState()?.teamQueue ?? []); // [{ id, name, queuedAt }]
+  const [teamSubMode, setTeamSubMode] = useState(() => loadLiveState()?.teamSubMode ?? 'Open Play'); // 'Open Play' | 'Round Robin'
+  const [rrSchedule, setRrSchedule] = useState(() => loadLiveState()?.rrSchedule ?? []); // [{ id, teamAId, teamBId, status: 'pending'|'active'|'done', winner }]
+  const [teamScoreModal, setTeamScoreModal] = useState(null); // { courtId, teamA, teamB, startTime, rrMatchId }
+  const [teamScoreA, setTeamScoreA] = useState('');
+  const [teamScoreB, setTeamScoreB] = useState('');
   const [scoreModal, setScoreModal] = useState(null);
   const [scoringEnabled, setScoringEnabled] = useState(false);
   const [winLoseEnabled, setWinLoseEnabled] = useState(false);
@@ -1705,6 +1881,15 @@ function App() {
   };
   const [notification, setNotification] = useState(null);
   const [activeTab, setActiveTab] = useState('courts');
+  useEffect(() => {
+    if (matchMode === 'Team Based' && ['queue', 'playerlist', 'requests'].includes(activeTab)) {
+      setActiveTab('courts');
+    }
+    if (matchMode !== 'Team Based' && activeTab === 'teamroster') {
+      setActiveTab('courts');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchMode]);
   const [manualSelected, setManualSelected] = useState([]);
   const [manualCourt, setManualCourt] = useState(null);
   const [waitlistSearch, setWaitlistSearch] = useState('');
@@ -1743,6 +1928,9 @@ function App() {
     col: 'wins',
     dir: 'desc'
   });
+  // Configurable tiebreaker for the Wins column when two players/teams are
+  // tied on wins.
+  const [winsTiebreak, setWinsTiebreak] = useState('diff'); // 'diff' | 'games' | 'winPct'
   // Group/Team sub-tab filter for Player Stats (also scopes the Rank List
   // sent to the preview screen).
   const [statsGroupFilter, setStatsGroupFilter] = useState(null);
@@ -1911,10 +2099,14 @@ function App() {
         playerList,
         requestedGames,
         playGroups,
-        teams
+        teams,
+        teamRoster,
+        teamQueue,
+        teamSubMode,
+        rrSchedule
       }));
     } catch {}
-  }, [numCourts, gameTime, matchMode, queue, courts, history, playerList, requestedGames, playGroups, teams]);
+  }, [numCourts, gameTime, matchMode, queue, courts, history, playerList, requestedGames, playGroups, teams, teamRoster, teamQueue, teamSubMode, rrSchedule]);
 
   // ── Pair-link modal (set/remove fixed partner on existing players) ───
   const [pairModal, setPairModal] = useState(null); // null | { playerId }
@@ -3413,6 +3605,10 @@ renderCourts();
       showNotif('Switch to Auto mode or use Assign Manually on a court');
       return;
     }
+    if (matchMode === 'Team Based') {
+      autoAssignTeamMatch(targetCourtId);
+      return;
+    }
     // OP Multi Group: courts are tied to groups, so find a group that
     // has both an open assigned court AND enough waiting players before
     // picking a court — unlike other modes, courts aren't interchangeable.
@@ -3713,6 +3909,10 @@ renderCourts();
     showNotif(`Court ${manualCourt} — ${matchTypeM} started!`);
   };
   const endGame = courtId => {
+    if (matchMode === 'Team Based') {
+      endTeamGame(courtId);
+      return;
+    }
     const court = courts.find(c => c.id === courtId);
     if (!court?.players) return;
     setScoreModal({
@@ -3725,6 +3925,141 @@ renderCourts();
     setScoreA('');
     setScoreB('');
     setWinLoseWinner(null);
+  };
+
+  // ── Team Based mode ────────────────────────────────────────────────
+  // Whole teams (not individual players) play each other. Registration is
+  // just a team name; a "match" pits Team A vs Team B directly, no rotating
+  // individual players. Two sub-modes: Open Play (FIFO team queue, auto-
+  // assigns next 2 waiting teams) and Round Robin (every team plays every
+  // other team exactly once, per a generated schedule).
+  const generateRoundRobin = () => {
+    if (teamRoster.length < 2) {
+      showNotif('Add at least 2 teams first');
+      return;
+    }
+    const pairs = [];
+    for (let i = 0; i < teamRoster.length; i++) {
+      for (let j = i + 1; j < teamRoster.length; j++) {
+        pairs.push({
+          id: uid(),
+          teamAId: teamRoster[i].id,
+          teamBId: teamRoster[j].id,
+          status: 'pending',
+          winner: null
+        });
+      }
+    }
+    setRrSchedule(pairs);
+    showNotif(`Round robin schedule generated — ${pairs.length} matches`);
+  };
+  const autoAssignTeamMatch = targetCourtId => {
+    const open = targetCourtId ? courts.find(c => c.id === targetCourtId && c.enabled && !c.players) : courts.find(c => c.enabled && !c.players);
+    if (!open) {
+      showNotif('No open courts available');
+      return;
+    }
+    if (teamSubMode === 'Round Robin') {
+      const next = rrSchedule.find(m => m.status === 'pending');
+      if (!next) {
+        showNotif('No pending round robin matches — generate a schedule first');
+        return;
+      }
+      const tA = teamRoster.find(t => t.id === next.teamAId);
+      const tB = teamRoster.find(t => t.id === next.teamBId);
+      if (!tA || !tB) {
+        showNotif('A scheduled team is missing from the roster — regenerate the schedule');
+        return;
+      }
+      setCourts(prev => prev.map(c => c.id === open.id ? {
+        ...c,
+        players: {
+          teamA: [tA],
+          teamB: [tB]
+        },
+        startTime: Date.now(),
+        rrMatchId: next.id
+      } : c));
+      setRrSchedule(prev => prev.map(m => m.id === next.id ? {
+        ...m,
+        status: 'active'
+      } : m));
+      showNotif(`Court ${open.id} — ${tA.name} vs ${tB.name} started! (Round Robin)`);
+      return;
+    }
+    if (teamQueue.length < 2) {
+      showNotif('Need at least 2 teams in the queue');
+      return;
+    }
+    const [t1, t2, ...rest] = teamQueue;
+    setCourts(prev => prev.map(c => c.id === open.id ? {
+      ...c,
+      players: {
+        teamA: [t1],
+        teamB: [t2]
+      },
+      startTime: Date.now()
+    } : c));
+    setTeamQueue(rest);
+    showNotif(`Court ${open.id} — ${t1.name} vs ${t2.name} started!`);
+  };
+  const endTeamGame = courtId => {
+    const c = courts.find(x => x.id === courtId);
+    if (!c?.players) return;
+    setTeamScoreModal({
+      courtId,
+      teamA: c.players.teamA[0],
+      teamB: c.players.teamB[0],
+      startTime: c.startTime,
+      rrMatchId: c.rrMatchId || null
+    });
+    setTeamScoreA('');
+    setTeamScoreB('');
+  };
+  const submitTeamScore = () => {
+    if (!teamScoreModal) return;
+    const sA = parseInt(teamScoreA) || 0;
+    const sB = parseInt(teamScoreB) || 0;
+    const winner = sA > sB ? 'A' : sB > sA ? 'B' : 'tie';
+    const {
+      courtId,
+      teamA,
+      teamB,
+      startTime,
+      rrMatchId
+    } = teamScoreModal;
+    const duration = startTime ? Math.floor((Date.now() - startTime) / 60000) : 0;
+    const newHistEntry = {
+      id: Date.now(),
+      courtId,
+      teamA: [teamA],
+      teamB: [teamB],
+      scoreA: sA,
+      scoreB: sB,
+      winner,
+      duration,
+      time: new Date().toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit'
+      }),
+      isTeamMatch: true
+    };
+    setHistory(prev => [...prev, newHistEntry]);
+    setCourts(prev => prev.map(c => c.id === courtId ? {
+      ...c,
+      players: null,
+      startTime: null,
+      rrMatchId: null
+    } : c));
+    if (rrMatchId) {
+      setRrSchedule(prev => prev.map(m => m.id === rrMatchId ? {
+        ...m,
+        status: 'done',
+        winner
+      } : m));
+    }
+    setTeamScoreModal(null);
+    showNotif('Match result recorded!');
   };
 
   // Swap two players on a court (used during live rearrange)
@@ -4301,7 +4636,8 @@ renderCourts();
       gender,
       team,
       opTeam,
-      group
+      group,
+      isTeam
     }) => {
       if (!playerStats[id]) {
         // Prefer the live Player List entry; fall back to the historical
@@ -4311,6 +4647,7 @@ renderCourts();
           name: current ? current.name : name,
           level: current ? current.level : level,
           gender: current ? current.gender : gender,
+          isTeam: !!isTeam,
           // OP Meet team affiliation — prefer the player's CURRENT team tag
           // (they may have been reassigned since this game was played),
           // fall back to whatever team they were on when the game was recorded.
@@ -4901,11 +5238,11 @@ renderCourts();
     title: "Run automated game simulation"
   }, "🧪 Test Sim")), /*#__PURE__*/React.createElement("div", {
     className: "tabbar"
-  }, [['courts', `Courts (${numCourts})`], ['queue', `Waitlist (${queue.length})`], ['playerlist', `Player List (${playerList.length})`], ['requests', `Requested (${requestedGames.length})`], ['history', `History (${history.length})`], ['stats', 'Player Stats'], ...(matchMode === 'OP Multi Group' ? [['grouplist', `Group List (${playGroups.length})`]] : []), ...(matchMode === 'OP Meet' ? [['teamlist', `Team List (${teams.length})`]] : []), ...(authUser.role === 'Superadmin' ? [['users', `Users (${users.length})`]] : [])].map(([key, label]) => /*#__PURE__*/React.createElement("div", {
+  }, [['courts', `Courts (${numCourts})`], ...(matchMode === 'Team Based' ? [['teamroster', `Teams (${teamRoster.length})`]] : [['queue', `Waitlist (${queue.length})`], ['playerlist', `Player List (${playerList.length})`], ['requests', `Requested (${requestedGames.length})`]]), ['history', `History (${history.length})`], ['stats', 'Player Stats'], ...(matchMode === 'OP Multi Group' ? [['grouplist', `Group List (${playGroups.length})`]] : []), ...(matchMode === 'OP Meet' ? [['teamlist', `Team List (${teams.length})`]] : []), ...(authUser.role === 'Superadmin' ? [['users', `Users (${users.length})`]] : [])].map(([key, label]) => /*#__PURE__*/React.createElement("div", {
     key: key,
     className: `tab ${activeTab === key ? 'active' : ''}`,
     onClick: () => setActiveTab(key)
-  }, label))), activeTab === 'courts' && /*#__PURE__*/React.createElement("div", {
+  }, label))), activeTab === 'courts' && matchMode !== 'Team Based' && /*#__PURE__*/React.createElement("div", {
     className: "courts-grid"
   }, courts.filter(c => c.enabled).map(court => /*#__PURE__*/React.createElement("div", {
     key: court.id,
@@ -5497,7 +5834,134 @@ renderCourts();
       textAlign: 'center',
       marginTop: 8
     }
-  }, "Need 4+ in queue"))))), showUpNext && activeTab === 'courts' && queue.length >= 4 && matchMode !== 'Manual' && (() => {
+  }, "Need 4+ in queue"))))), activeTab === 'courts' && matchMode === 'Team Based' && (() => {
+    const donePlayed = rrSchedule.filter(m => m.status === 'done').length;
+    return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "controls-bar"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "ctrl-group"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "ctrl-label"
+    }, "Team Mode"), ['Open Play', 'Round Robin'].map(m => /*#__PURE__*/React.createElement("button", {
+      key: m,
+      className: `mode-btn ${teamSubMode === m ? 'active' : ''}`,
+      onClick: () => setTeamSubMode(m)
+    }, m))), teamSubMode === 'Round Robin' && /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-teal btn-sm",
+      onClick: generateRoundRobin,
+      title: "Builds a fresh schedule where every team plays every other team once"
+    }, "🔁 ", rrSchedule.length ? 'Regenerate Schedule' : 'Generate Schedule'), /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-green btn-sm",
+      style: {
+        marginLeft: 'auto'
+      },
+      onClick: () => autoAssign()
+    }, "▶ Auto Assign")), teamSubMode === 'Round Robin' && rrSchedule.length > 0 && /*#__PURE__*/React.createElement("div", {
+      className: "card",
+      style: {
+        marginBottom: 16
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "section-title"
+    }, "Round Robin Schedule (", donePlayed, "/", rrSchedule.length, " played)"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        maxHeight: 240,
+        overflowY: 'auto'
+      }
+    }, rrSchedule.map(m => {
+      const tA = teamRoster.find(t => t.id === m.teamAId);
+      const tB = teamRoster.find(t => t.id === m.teamBId);
+      return /*#__PURE__*/React.createElement("div", {
+        key: m.id,
+        style: {
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '7px 10px',
+          borderRadius: 6,
+          background: 'var(--surface2)',
+          border: '1px solid var(--border)',
+          fontSize: 12
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontWeight: 600
+        }
+      }, tA?.name || '(deleted team)', " vs ", tB?.name || '(deleted team)'), /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 10,
+          fontWeight: 700,
+          color: m.status === 'done' ? 'var(--green)' : m.status === 'active' ? 'var(--gold)' : 'var(--text-dim)'
+        }
+      }, m.status === 'done' ? `✓ ${m.winner === 'tie' ? 'Tie' : (m.winner === 'A' ? tA?.name : tB?.name) + ' won'}` : m.status === 'active' ? '● In Progress' : 'Pending'));
+    }))), /*#__PURE__*/React.createElement("div", {
+      className: "courts-grid"
+    }, courts.filter(c => c.enabled).map(court => /*#__PURE__*/React.createElement("div", {
+      key: court.id,
+      className: `court-card ${court.players ? 'active' : 'open'}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "court-header"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "court-name"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: `court-status-dot ${court.players ? 'dot-green' : 'dot-gray'}`
+    }), "Court ", court.id), court.players ? /*#__PURE__*/React.createElement(CourtTimer, {
+      startTime: court.startTime,
+      limitMin: gameTime
+    }) : /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--text-dim)'
+      }
+    }, "OPEN")), court.players ? (() => {
+      const tA = court.players.teamA[0];
+      const tB = court.players.teamB[0];
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          textAlign: 'center',
+          padding: '16px 0 4px'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 17,
+          fontWeight: 800,
+          color: 'var(--text-main)'
+        }
+      }, tA?.name || '—'), /*#__PURE__*/React.createElement("div", {
+        className: "team-divider",
+        style: {
+          margin: '8px 0'
+        }
+      }, "VS"), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 17,
+          fontWeight: 800,
+          color: 'var(--text-main)'
+        }
+      }, tB?.name || '—'), /*#__PURE__*/React.createElement("button", {
+        className: "btn btn-red btn-sm",
+        style: {
+          marginTop: 16,
+          width: '100%'
+        },
+        onClick: () => endGame(court.id)
+      }, "End & Score"));
+    })() : /*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: 'center',
+        padding: '20px 0 6px'
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-blue btn-sm",
+      style: {
+        width: '100%'
+      },
+      onClick: () => autoAssign(court.id)
+    }, "▶ Start Match"))))));
+  })(), showUpNext && activeTab === 'courts' && queue.length >= 4 && matchMode !== 'Manual' && (() => {
     // Simulate the next 2 auto-assign picks without touching real state.
     // Must mirror autoAssign exactly: same forceMixed counter logic and
     // same priorityIds (readyToFire requested game) check.
@@ -7047,13 +7511,14 @@ renderCourts();
         alignItems: 'center',
         marginBottom: 2
       }
-    }, /*#__PURE__*/React.createElement(GenderTag, {
+    }, !g.isTeamMatch && /*#__PURE__*/React.createElement(GenderTag, {
       gender: p.gender
-    }), /*#__PURE__*/React.createElement(LevelBadge, {
+    }), !g.isTeamMatch && /*#__PURE__*/React.createElement(LevelBadge, {
       level: p.level
     }), /*#__PURE__*/React.createElement("span", {
       style: {
-        fontSize: 12
+        fontSize: g.isTeamMatch ? 13 : 12,
+        fontWeight: g.isTeamMatch ? 700 : 400
       }
     }, p.name)))), /*#__PURE__*/React.createElement("td", {
       style: {
@@ -7085,13 +7550,14 @@ renderCourts();
         alignItems: 'center',
         marginBottom: 2
       }
-    }, /*#__PURE__*/React.createElement(GenderTag, {
+    }, !g.isTeamMatch && /*#__PURE__*/React.createElement(GenderTag, {
       gender: p.gender
-    }), /*#__PURE__*/React.createElement(LevelBadge, {
+    }), !g.isTeamMatch && /*#__PURE__*/React.createElement(LevelBadge, {
       level: p.level
     }), /*#__PURE__*/React.createElement("span", {
       style: {
-        fontSize: 12
+        fontSize: g.isTeamMatch ? 13 : 12,
+        fontWeight: g.isTeamMatch ? 700 : 400
       }
     }, p.name)))), /*#__PURE__*/React.createElement("td", {
       style: {
@@ -7135,9 +7601,39 @@ renderCourts();
     style: {
       display: 'flex',
       gap: 6,
-      flexWrap: 'wrap'
+      flexWrap: 'wrap',
+      alignItems: 'center'
     }
-  }, /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 5,
+      fontSize: 11,
+      fontWeight: 600,
+      color: 'var(--text-muted)'
+    },
+    title: "When two players/teams are tied on Wins, break the tie by this stat"
+  }, "Wins tie-break:", /*#__PURE__*/React.createElement("select", {
+    value: winsTiebreak,
+    onChange: e => setWinsTiebreak(e.target.value),
+    style: {
+      background: 'var(--surface3)',
+      color: 'var(--text-main)',
+      border: '1px solid var(--border)',
+      borderRadius: 6,
+      padding: '4px 6px',
+      fontSize: 11,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "diff"
+  }, "Point Diff"), /*#__PURE__*/React.createElement("option", {
+    value: "games"
+  }, "Games Played"), /*#__PURE__*/React.createElement("option", {
+    value: "winPct"
+  }, "Win %"))), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-gold btn-sm",
     onClick: sendTopPerformerToPreview,
     title: "Show a celebratory Top Performer card on the preview screen",
@@ -7414,7 +7910,7 @@ renderCourts();
     if (col === 'name') return dir * a.s.name.localeCompare(b.s.name);
     if (col === 'level') return dir * (LEVEL_IDX[a.s.level] - LEVEL_IDX[b.s.level]);
     if (col === 'games') return dir * (a.s.games - b.s.games);
-    if (col === 'wins') return dir * (a.s.wins - b.s.wins) || b.s.games - a.s.games;
+    if (col === 'wins') return dir * (a.s.wins - b.s.wins) || (winsTiebreak === 'games' ? b.s.games - a.s.games : winsTiebreak === 'winPct' ? b.winPct - a.winPct : b.diff - a.diff);
     if (col === 'losses') return dir * (a.losses - b.losses);
     if (col === 'winPct') return dir * (a.winPct - b.winPct);
     if (col === 'pts') return dir * (a.s.pts - b.s.pts);
@@ -7442,18 +7938,18 @@ renderCourts();
         alignItems: 'center',
         gap: 5
       }
-    }, /*#__PURE__*/React.createElement(GenderTag, {
+    }, !s.isTeam && /*#__PURE__*/React.createElement(GenderTag, {
       gender: s.gender
     }), /*#__PURE__*/React.createElement("span", {
       style: {
         fontWeight: 700,
         fontSize: 13
       }
-    }, s.name))), /*#__PURE__*/React.createElement("td", {
+    }, s.isTeam ? '🏆 ' : '', s.name))), /*#__PURE__*/React.createElement("td", {
       style: {
         textAlign: 'center'
       }
-    }, /*#__PURE__*/React.createElement(LevelBadge, {
+    }, !s.isTeam && /*#__PURE__*/React.createElement(LevelBadge, {
       level: s.level
     })), /*#__PURE__*/React.createElement("td", {
       style: {
@@ -7529,6 +8025,14 @@ renderCourts();
   }), activeTab === 'teamlist' && /*#__PURE__*/React.createElement(TeamListTab, {
     teams: teams,
     setTeams: setTeams,
+    showNotif: showNotif
+  }), activeTab === 'teamroster' && /*#__PURE__*/React.createElement(TeamRosterTab, {
+    teamRoster: teamRoster,
+    setTeamRoster: setTeamRoster,
+    teamQueue: teamQueue,
+    setTeamQueue: setTeamQueue,
+    courts: courts,
+    teamSubMode: teamSubMode,
     showNotif: showNotif
   }), activeTab === 'users' && authUser.role === 'Superadmin' && /*#__PURE__*/React.createElement(UserManagementTab, {
     users: users,
@@ -8106,6 +8610,55 @@ renderCourts();
     }, "Save Changes"), /*#__PURE__*/React.createElement("button", {
       className: "btn btn-ghost",
       onClick: () => setHistoryEditModal(null)
+    }, "Cancel"))));
+  })(), teamScoreModal && (() => {
+    const {
+      teamA,
+      teamB
+    } = teamScoreModal;
+    return /*#__PURE__*/React.createElement("div", {
+      className: "score-modal-overlay",
+      onClick: e => e.target === e.currentTarget && setTeamScoreModal(null)
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "score-modal-inner"
+    }, /*#__PURE__*/React.createElement("h2", null, "\uD83C\uDFC6 Game Over — Court ", teamScoreModal.courtId), /*#__PURE__*/React.createElement("p", {
+      style: {
+        color: 'var(--text-muted)',
+        fontSize: 12,
+        marginTop: 6
+      }
+    }, teamA.name, " vs ", teamB.name), /*#__PURE__*/React.createElement("div", {
+      className: "score-inputs"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "score-team"
+    }, /*#__PURE__*/React.createElement("label", null, teamA.name), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      min: "0",
+      max: "99",
+      value: teamScoreA,
+      onChange: e => setTeamScoreA(e.target.value),
+      placeholder: "0",
+      autoFocus: true
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "score-team"
+    }, /*#__PURE__*/React.createElement("label", null, teamB.name), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      min: "0",
+      max: "99",
+      value: teamScoreB,
+      onChange: e => setTeamScoreB(e.target.value),
+      placeholder: "0"
+    }))), /*#__PURE__*/React.createElement("div", {
+      className: "modal-btns"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-green",
+      style: {
+        flex: 1
+      },
+      onClick: submitTeamScore
+    }, "Save Score"), /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-ghost",
+      onClick: () => setTeamScoreModal(null)
     }, "Cancel"))));
   })());
 }
