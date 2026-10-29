@@ -190,6 +190,16 @@ a.btn{text-decoration:none;color:inherit}
 .cs-nl i{display:block;font-style:normal;font-size:.72em;color:#A9C4DD;text-transform:uppercase;letter-spacing:.06em}
 .csbox{position:relative;width:100%;max-width:1300px;border-radius:12px;overflow:auto;max-height:100%;box-shadow:0 24px 80px rgba(0,0,0,.5)}
 .csbox .st-tools{top:auto;bottom:12px}
+.tbb{display:inline-block;margin-left:6px;font-size:10px;font-weight:700;letter-spacing:.04em;padding:1px 5px;border-radius:3px;background:var(--court-soft);color:var(--court);vertical-align:1px;white-space:nowrap}
+.tbb.open{background:var(--warn-soft);color:var(--warn)}
+.rktie{margin-top:8px;padding:8px 10px;border-radius:var(--r);background:var(--warn-soft);border:1px solid var(--warn);font-size:13px}
+.rkbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}.rksp{flex:1}
+.rkov{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--warn);background:var(--warn-soft);padding:2px 8px;border-radius:99px}
+.rked{border:1px dashed var(--court);border-radius:var(--r);padding:10px 12px;background:var(--court-soft)}
+.rkl{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.rkl li{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:4px 6px 4px 10px;min-width:0}
+.rkl .rkn{font-family:var(--display);font-weight:700;font-size:17px;width:22px;font-variant-numeric:tabular-nums}
+.rkl .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
 .savebox{display:flex;align-items:center;gap:10px;min-height:34px}
 .sstat{font-size:12.5px;color:var(--muted);max-width:240px;line-height:1.3}
 .sstat.ok{color:var(--accent)}
@@ -543,8 +553,49 @@ function standings(ids,ms,R,opt={}){const st={};ids.forEach(id=>st[id]={id,p:0,w
     if(opt.kc&&m.court===1)st[r.w].kc++}
   const list=Object.values(st);list.forEach(s=>{s.diff=s.pf-s.pa;s.pts=s.w+(opt.kc?s.kc:0)});
   if(opt.buch)list.forEach(s=>s.buch=s.opp.reduce((t,o)=>t+st[o].w,0));
+  if(opt.tb){const out=[];[...new Set(list.map(s=>s.pts))].sort((a,b)=>b-a).forEach(pts=>{
+      const blk=list.filter(s=>s.pts===pts).sort((x,y)=>ids.indexOf(x.id)-ids.indexOf(y.id));out.push(...tbResolve(blk,ms,R,ids))});return out}
   list.sort((x,y)=>(y.pts-x.pts)||(opt.buch?y.buch-x.buch:0)||(y.diff-x.diff)||(y.pf-x.pf)||ids.indexOf(x.id)-ids.indexOf(y.id));
   return list}
+/* ---------- tiebreakers ----------
+   Teams level on wins are separated in this order:
+   1. head-to-head: wins in games among the tied teams only, then +/- in those games (a mini-table, so 3-way ties work)
+   2. overall +/- (point difference)   3. fewest points allowed
+   When a step splits a tie but leaves 2+ teams still level, those teams start again from step 1.
+   Anything still level after step 3 is an open tie (s.tieOpen): the desk settles it with Edit order. */
+const TB_ORDER=['h2h','diff','pa'],TB_LABEL={h2h:'H2H',diff:'+/−',pa:'PA'},TB_TITLE={h2h:'Tie broken by head-to-head',diff:'Tie broken by point difference (+/−)',pa:'Tie broken by fewest points allowed'};
+function tbResolve(blk,ms,R,ids){if(blk.length<2)return blk;
+  for(const c of TB_ORDER){let key;
+    if(c==='h2h'){const set=new Set(blk.map(s=>s.id)),mw={},md={};blk.forEach(s=>{mw[s.id]=0;md[s.id]=0});
+      for(const m of ms){const r=R[m.id];if(!r.done||r.bye||!set.has(r.a)||!set.has(r.b))continue;mw[r.w]++;md[r.a]+=r.sa-r.sb;md[r.b]+=r.sb-r.sa}
+      key=s=>[mw[s.id],md[s.id]]}
+    else if(c==='diff')key=s=>[s.diff];else key=s=>[-s.pa];
+    const cmp=(x,y)=>{const a=key(x),b=key(y);for(let i=0;i<a.length;i++)if(a[i]!==b[i])return b[i]-a[i];return 0};
+    const sorted=blk.slice().sort((x,y)=>cmp(x,y)||ids.indexOf(x.id)-ids.indexOf(y.id)),subs=[];
+    sorted.forEach(s=>{const last=subs[subs.length-1];if(last&&cmp(last[0],s)===0)last.push(s);else subs.push([s])});
+    if(subs.length===1)continue;
+    const out=[];subs.forEach(sb=>{if(sb.length===1){if(!sb[0].tb)sb[0].tb=c;out.push(sb[0])}else out.push(...tbResolve(sb,ms,R,ids))});return out}
+  blk.forEach(s=>{s.tieOpen=true;s.tieWith=blk.map(x=>x.id)});return blk}
+/* Ranked table for one standings table of a group, with the desk's manual order applied when there is one.
+   key: 'all' (the whole group), 'b0','b1'... (bracket or pool A, B...), 'po' (round-robin play-off). Manual orders: grp.data.rankOv[key]. */
+function ranked(grp,key,ids,ms,R,opt={}){const list=standings(ids,ms,R,Object.assign({tb:!opt.buch&&!opt.kc},opt));
+  const ov=grp.data&&grp.data.rankOv&&grp.data.rankOv[key];
+  if(Array.isArray(ov)&&ov.length===list.length&&list.every(s=>ov.includes(s.id))){list.sort((a,b)=>ov.indexOf(a.id)-ov.indexOf(b.id));list.forEach(s=>{s.tieOpen=false;s.tb=null});list.ov=true}
+  return list}
+/* The ranked list behind a table key, for the order editor */
+function tableFor(grp,key,R){const ids=grp.pairs.map(p=>p.id);
+  if(key==='po')return ranked(grp,'po',Object.keys(grp.data.poTags||{}),grp.matches.filter(m=>m.po),R);
+  if(key[0]==='b'){const i=+key.slice(1);return ranked(grp,key,grp.data.pools[i],poolMs(grp,i),R)}
+  return ranked(grp,'all',ids,grp.matches,R,grp.format==='swiss'?{byeWin:true,buch:true}:grp.format==='kotc'?{kc:true}:{})}
+/* Cross-bracket comparison (brackets can differ in size): win %, then +/- per game, then fewest points allowed per game */
+const perGame=(s,k)=>s.p?s[k]/s.p:0;
+const crossCmp=(a,b)=>(perGame(b,'w')-perGame(a,'w'))||(perGame(b,'diff')-perGame(a,'diff'))||(perGame(a,'pa')-perGame(b,'pa'));
+/* An open tie that decides who goes through (or their play-off seeding) holds the play-off until the desk settles it */
+function tieProblem(grp,R){if(!grp.data.pools||!hasPlayoff(grp))return'';const word=grp.format==='pool'?'Pool':'Bracket',bad=[];
+  const cut=isBQ(grp)?(qfInBracket(grp)&&!qfManual(grp)?4:Infinity):grp.opts.advance;
+  grp.data.pools.forEach((pl,i)=>{const L=ranked(grp,'b'+i,pl,poolMs(grp,i),R),j=L.findIndex((s,k)=>s.tieOpen&&k<cut);if(j>=0)bad.push(`${word} ${LET[i]} (tie for ${ordinal(j+1)})`)});
+  return bad.length?`Settle the open tie${bad.length>1?'s':''} first: ${bad.join(', ')}. Use Edit order under the table.`:''}
+const ordinal=n=>n+(n%100>=11&&n%100<=13?'th':['th','st','nd','rd'][n%10]||'th');
 
 function swissNext(grp){const R=resolve(grp),ids=grp.pairs.map(p=>p.id),ms=grp.matches.filter(m=>m.stage==='sw');
   const r=(ms.length?Math.max(...ms.map(m=>m.round)):0)+1;const played=new Set(),hadBye=new Set();
@@ -590,9 +641,9 @@ function crossOrder(tiers,G){let first=null;
     for(let i=0;i<N/2;i++){const a=list[o[2*i]-1],b=list[o[2*i+1]-1];if(a&&b&&a.g===b.g){clash=true;break}}
     if(!clash)return list}
   return first}
-function poolQualifiers(grp,R){const tables=grp.data.pools.map((pl,pi)=>standings(pl,grp.matches.filter(m=>m.stage==='pool'&&m.pool===pi),R)),G=tables.length,k=grp.opts.advance;
+function poolQualifiers(grp,R){const tables=grp.data.pools.map((pl,pi)=>ranked(grp,'b'+pi,pl,poolMs(grp,pi),R)),G=tables.length,k=grp.opts.advance;
   const tiers=[];for(let t=0;t<k;t++)tiers.push(tables.map((tb,g)=>tb[t]?{id:tb[t].id,g,tag:LET[g]+(t+1),s:tb[t]}:null));
-  if(grp.opts.poSeed==='record'){const out=[];tiers.forEach(tier=>{const x=tier.filter(Boolean);x.sort((p,q)=>(q.s.w-p.s.w)||(q.s.diff-p.s.diff)||(q.s.pf-p.s.pf));out.push(...x)});return out}
+  if(grp.opts.poSeed==='record'){const out=[];tiers.forEach(tier=>{const x=tier.filter(Boolean);x.sort((p,q)=>crossCmp(p.s,q.s));out.push(...x)});return out}
   return crossOrder(tiers,G)}
 function buildPlayoff(grp,R){const q=poolQualifiers(grp,R);grp.data.poTags={};q.forEach(x=>grp.data.poTags[x.id]=x.tag);const ids=q.map(x=>x.id);
   let fmt=grp.opts.poFormat||'se';if(fmt==='de'&&ids.length<3)fmt='se';let ms;
@@ -616,15 +667,15 @@ const poolMs=(grp,g)=>grp.matches.filter(m=>m.stage==='pool'&&m.pool===g);
 const bracketOf=(grp,id)=>grp.data.pools.findIndex(pl=>pl.includes(id));
 const qfManual=grp=>(grp.opts.qfSeed||'std')==='manual';
 /* Bracket finish tags (A1, A2 ...) for every pair */
-function tagMap(grp,R){const t={};grp.data.pools.forEach((pl,g)=>standings(pl,poolMs(grp,g),R).forEach((s,i)=>t[s.id]=LET[g]+(i+1)));return t}
+function tagMap(grp,R){const t={};grp.data.pools.forEach((pl,g)=>ranked(grp,'b'+g,pl,poolMs(grp,g),R).forEach((s,i)=>t[s.id]=LET[g]+(i+1)));return t}
 /* How many quarterfinal matches. Default: 2 per bracket (1 vs 4, 2 vs 3). */
 function qfCountOf(grp){const G=bracketCount(grp),mx=Math.max(2,Math.floor(grp.pairs.length/2)),v=grp.opts.qfCount>0?grp.opts.qfCount:2*G;return Math.max(2,Math.min(v,mx))}
 const qfInBracket=grp=>qfCountOf(grp)===2*bracketCount(grp);
-function qfStd(grp,R){const K=qfCountOf(grp),tables=grp.data.pools.map((pl,g)=>standings(pl,poolMs(grp,g),R));
+function qfStd(grp,R){const K=qfCountOf(grp),tables=grp.data.pools.map((pl,g)=>ranked(grp,'b'+g,pl,poolMs(grp,g),R));
   if(K===2*tables.length)return tables.flatMap(st=>{const id=i=>st[i]?st[i].id:null;return[[id(0),id(3)],[id(1),id(2)]]});
   /* Any other count: rank qualifiers across brackets (all 1st places, then 2nd places...), take the top 2K, play 1 vs 2K, 2 vs 2K-1..., keeping same-bracket pairs apart where possible */
   const list=[],deep=Math.max(...tables.map(t=>t.length));
-  for(let t=0;t<deep;t++){const tier=tables.map((tb,g)=>tb[t]?{id:tb[t].id,g,s:tb[t]}:null).filter(Boolean);tier.sort((a,b)=>(b.s.w-a.s.w)||(b.s.diff-a.s.diff)||(b.s.pf-a.s.pf));list.push(...tier)}
+  for(let t=0;t<deep;t++){const tier=tables.map((tb,g)=>tb[t]?{id:tb[t].id,g,s:tb[t]}:null).filter(Boolean);tier.sort((a,b)=>crossCmp(a.s,b.s));list.push(...tier)}
   const Q=list.slice(0,2*K),pr=[];for(let i=0;i<K;i++)pr.push([Q[i]||null,Q[2*K-1-i]||null]);
   return repairPairs(pr).map(p=>p.map(x=>x?x.id:null))}
 /* Quarterfinal pairings: standard, or the manual picks (starting from standard) */
@@ -647,8 +698,8 @@ function repairPairs(pr){for(let i=0;i<pr.length;i++){const[a,b]=pr[i];if(!a||!b
     for(let j=0;j<pr.length;j++){if(j===i)continue;const[c,d]=pr[j];if(!c||!d)continue;if(a.g!==d.g&&c.g!==b.g){pr[i][1]=d;pr[j][1]=b;break}}}return pr}
 function pairsToSeeds(pr){const N=pr.length*2,o=seedOrder(N),S=new Array(N).fill(null);pr.forEach((p,i)=>{S[o[2*i]-1]=p[0];S[o[2*i+1]-1]=p[1]});return S}
 function semiPairsAuto(F,mode){const L=F.slice();
-  if(mode==='diff')L.sort((a,b)=>(b.all.diff-a.all.diff)||(b.all.w-a.all.w)||(b.all.pf-a.all.pf));
-  else L.sort((a,b)=>(a.rank-b.rank)||(b.gs.w-a.gs.w)||(b.gs.diff-a.gs.diff)||(b.gs.pf-a.gs.pf));
+  if(mode==='diff')L.sort((a,b)=>(perGame(b.all,'diff')-perGame(a.all,'diff'))||crossCmp(a.all,b.all));
+  else L.sort((a,b)=>(a.rank-b.rank)||crossCmp(a.gs,b.gs));
   const pr=seededPairs(L);return mode==='diff'?pr:repairPairs(pr)}
 function semiPairs(grp,F){const mode=grp.opts.semiSeed||'rank';
   if(mode!=='manual')return semiPairsAuto(F,mode);
@@ -679,24 +730,24 @@ function champion(grp,R){const f=grp.format,ids=grp.pairs.map(p=>p.id);
   if(grp.status!=='live')return null;
   if(grp.data.pools){const po=grp.matches.filter(m=>m.po);if(!po.length)return null;const fmt=grp.data.poFmt||'se';
     if(fmt==='de')return deChamp(R,po);
-    if(fmt==='rr'){if(!po.every(m=>R[m.id].done))return null;return standings(Object.keys(grp.data.poTags||{}),po,R)[0].id}
+    if(fmt==='rr'){if(!po.every(m=>R[m.id].done))return null;const L=ranked(grp,'po',Object.keys(grp.data.poTags||{}),po,R);return L[0].tieOpen?null:L[0].id}
     const fin=finalOf(po);return fin&&R[fin.id].done?R[fin.id].w:null}
   if(f==='se'){const m=finalOf(grp.matches);return m&&R[m.id].done?R[m.id].w:null}
   if(f==='de')return deChamp(R,grp.matches);
   const {t,d}=progress(grp,R);if(!t||t!==d)return null;
-  if(f==='rr')return standings(ids,grp.matches,R)[0].id;
-  if(f==='swiss'){const ms=grp.matches;const rd=Math.max(...ms.map(m=>m.round));if(rd<grp.data.total)return null;return standings(ids,ms,R,{byeWin:true,buch:true})[0].id}
-  if(f==='kotc'){const rd=Math.max(...grp.matches.map(m=>m.round));if(rd<grp.opts.kotcRounds)return null;return standings(ids,grp.matches,R,{kc:true})[0].id}
+  if(f==='rr'){const L=ranked(grp,'all',ids,grp.matches,R);return L[0].tieOpen?null:L[0].id}
+  if(f==='swiss'){const ms=grp.matches;const rd=Math.max(...ms.map(m=>m.round));if(rd<grp.data.total)return null;return ranked(grp,'all',ids,ms,R,{byeWin:true,buch:true})[0].id}
+  if(f==='kotc'){const rd=Math.max(...grp.matches.map(m=>m.round));if(rd<grp.opts.kotcRounds)return null;return ranked(grp,'all',ids,grp.matches,R,{kc:true})[0].id}
   return null}
 function finalOf(ms){const x=ms.filter(m=>!m.bronze);if(!x.length)return null;const K=Math.max(...x.map(m=>m.round));return x.find(m=>m.round===K)}
 /* Runner-up and 3rd place, where the format decides them */
 function podium(grp,R,ch){const ids=grp.pairs.map(p=>p.id),f=grp.format;let second=null,third=null;
   const fromFinal=ms=>{const fin=finalOf(ms);if(fin&&R[fin.id].done)second=R[fin.id].l;const b=ms.find(m=>m.bronze);if(b&&R[b.id].done&&!R[b.id].bye)third=R[b.id].w};
   if(grp.data.pools){const po=grp.matches.filter(m=>m.po),fmt=grp.data.poFmt||'se';
-    if(fmt==='de')second=deRunner(R,po);else if(fmt==='rr'){const s=standings(Object.keys(grp.data.poTags||{}),po,R);second=s[1]&&s[1].id;third=s[2]&&s[2].id}else fromFinal(po)}
+    if(fmt==='de')second=deRunner(R,po);else if(fmt==='rr'){const s=ranked(grp,'po',Object.keys(grp.data.poTags||{}),po,R);second=s[1]&&s[1].id;third=s[2]&&s[2].id}else fromFinal(po)}
   else if(f==='se')fromFinal(grp.matches);
   else if(f==='de')second=deRunner(R,grp.matches);
-  else{const s=f==='swiss'?standings(ids,grp.matches,R,{byeWin:true,buch:true}):f==='kotc'?standings(ids,grp.matches,R,{kc:true}):standings(ids,grp.matches,R);second=s[1]&&s[1].id;third=s[2]&&s[2].id}
+  else{const s=tableFor(grp,'all',R);second=s[1]&&s[1].id;third=s[2]&&s[2].id}
   return{second:second&&second!=='BYE'?second:null,third:third&&third!=='BYE'?third:null}}
 
 /* ---------- view helpers ---------- */
@@ -718,10 +769,21 @@ function matchCard(grp,m,R){const r=R[m.id];const ready=r.a&&r.b&&r.a!=='BYE'&&r
   const w=r.done&&!r.bye?scoreWarn(grp,r.sa,r.sb):'';
   const onCt=m.courtId&&CU[m.courtId]&&CU[m.courtId].m===m;
   return`<div class="match ${r.done?'done':''} ${ready&&!r.done?'live':''} ${onCt?'oncourt':''}"><div class="mh"><span>${esc(m.label)}</span>${w?`<span class="warn">${esc(w)}</span>`:courtCtl(grp,m,r)}</div>${row('a')}${row('b')}</div>`}
+/* A standings table with its tie notices and the desk's Edit order control */
+function rankTable(grp,key,list,opt={}){const ek=grp.id+':'+key;
+  if(ui.rkEdit===ek)return rankEditor(grp,key);
+  const groups=[];if(opt.complete)list.forEach((s,i)=>{if(s.tieOpen&&!groups.some(g=>g.ids.includes(s.id)))groups.push({at:i,ids:s.tieWith})});
+  const notes=groups.map(g=>`<div class="rktie" role="status"><b>Tie for ${ordinal(g.at+1)}</b> after all tiebreakers: ${g.ids.map(id=>esc(nm(id))).join(', ')}. Settle it with Edit order, for example after a coin toss or a playoff point.</div>`).join('');
+  return table(list,opt)+notes+`<div class="rkbar">${list.ov?'<span class="rkov">Order set by the desk</span>':'<span class="note">Badges show which tiebreaker separated teams level on wins.</span>'}
+    <span class="rksp"></span>${list.ov?cbtn('rkreset:'+ek,'Reset to automatic','sm ghost'):''}<button class="btn sm ${groups.length?'primary':'ghost'}" data-act="rkedit" data-k="${key}">${groups.length?'Settle tie':'Edit order'}</button></div>`}
+function rankEditor(grp,key){const d=ui.rkDraft||[],seeded=key[0]==='b'&&grp.matches.some(m=>m.po||m.bq);
+  return`<div class="rked"><p class="note" style="margin:0 0 8px">Move pairs up or down, then save. This order decides who goes through, play-off seeding, the champion and the podium.${seeded?' The play-off is already seeded: press Re-seed afterwards to apply the new order.':''}</p>
+    <ol class="rkl">${d.map((id,i)=>`<li><span class="rkn">${i+1}</span><span class="nm">${esc(nm(id))}</span><button class="btn sm ghost" data-act="rkup" data-i="${i}" ${i?'':'disabled'} aria-label="Move ${esc(nm(id))} up">▲</button><button class="btn sm ghost" data-act="rkdn" data-i="${i}" ${i<d.length-1?'':'disabled'} aria-label="Move ${esc(nm(id))} down">▼</button></li>`).join('')}</ol>
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn sm primary" data-act="rksave" data-k="${key}">Save order</button><button class="btn sm ghost" data-act="rkcancel">Cancel</button></div></div>`}
 function table(list,opt={}){const adv=opt.adv||0;
   const gp=s=>opt.of?`${s.p}/${typeof opt.of==='function'?opt.of(s):opt.of}`:s.p;
   const h=`<tr><th>#</th><th>Pair</th><th title="Games played${opt.of?' of games scheduled':''}">GP</th><th>W</th><th>L</th>${opt.kc?'<th title="Wins on the top court">Top ct</th><th>Pts</th>':''}<th>PF</th><th>PA</th><th>+/−</th>${opt.buch?'<th title="Buchholz: total wins of opponents faced">Buch</th>':''}</tr>`;
-  const rows=list.map((s,i)=>`<tr class="${i<adv?'adv':''}"><td class="rk">${i+1}</td><td>${esc(nm(s.id))}</td><td class="gp">${gp(s)}</td><td>${s.w}</td><td>${s.l}</td>${opt.kc?`<td>${s.kc}</td><td><b>${s.pts}</b></td>`:''}<td>${s.pf}</td><td>${s.pa}</td><td class="${s.diff>0?'pos':s.diff<0?'neg':''}">${s.diff>0?'+':''}${s.diff}</td>${opt.buch?`<td>${s.buch}</td>`:''}</tr>`).join('');
+  const rows=list.map((s,i)=>`<tr class="${i<adv?'adv':''}"><td class="rk">${i+1}</td><td>${esc(nm(s.id))}${s.tb?`<span class="tbb" title="${TB_TITLE[s.tb]}">${TB_LABEL[s.tb]}</span>`:''}${s.tieOpen&&opt.complete?'<span class="tbb open" title="Still tied after all tiebreakers">Tied</span>':''}</td><td class="gp">${gp(s)}</td><td>${s.w}</td><td>${s.l}</td>${opt.kc?`<td>${s.kc}</td><td><b>${s.pts}</b></td>`:''}<td>${s.pf}</td><td>${s.pa}</td><td class="${s.diff>0?'pos':s.diff<0?'neg':''}">${s.diff>0?'+':''}${s.diff}</td>${opt.buch?`<td>${s.buch}</td>`:''}</tr>`).join('');
   return`<div class="tw"><table>${h}${rows}</table></div>`}
 function rounds(grp,ms,R,sits){const by={};ms.forEach(m=>(by[m.round]=by[m.round]||[]).push(m));
   return Object.keys(by).map(Number).sort((a,b)=>a-b).map(r=>{const list=by[r],done=list.every(m=>R[m.id].done);const sit=sits&&sits[r-1];
@@ -785,7 +847,7 @@ function bracketOpts(grp){const o=grp.opts,n=grp.pairs.length,isPool=grp.format=
     ${fmt==='de'?`<label class="toggle" style="padding-bottom:8px"><input type="checkbox" id="opt_gf" data-act="gfreset" ${o.gfReset?'checked':''}> Grand-final reset game</label>`:''}
     <p class="preview"><b>Play-off</b>${esc(playoffPreview(G,adv,fmt==='de'&&G*adv<3?'se':fmt,o.poSeed||'cross',o.bronze))}</p>`}
   const games=sizes.reduce((t,s)=>t+s*(s-1)/2,0),lo=Math.min(...sizes),hi=Math.max(...sizes);
-  h+=`<p class="note" style="flex-basis:100%;margin:0">${G>1?`${G} ${one}s of ${lo===hi?lo:`${lo}–${hi}`} pairs. `:''}${games} round-robin matches. Ranked by wins, then point differential, then points scored.${!po&&G>1?` Each ${one} finishes with its own winner. Turn on the play-off to crown one champion.`:''}</p>`;
+  h+=`<p class="note" style="flex-basis:100%;margin:0">${G>1?`${G} ${one}s of ${lo===hi?lo:`${lo}–${hi}`} pairs. `:''}${games} round-robin matches. Ranked by wins, then head-to-head, +/−, and fewest points allowed. You can set the order by hand at any time.${!po&&G>1?` Each ${one} finishes with its own winner. Turn on the play-off to crown one champion.`:''}</p>`;
   if(G>1){const seed={};grp.pairs.forEach((p,i)=>seed[p.id]=i+1);const Lw=isPool?'Pool':'Bracket';
     h+=`<div style="flex-basis:100%"><div class="row" style="justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px"><span class="lbl">${Lw} draw</span>
       <div class="row" style="gap:8px;align-items:center">${manual?'<button class="btn sm ghost" data-act="drawsnake">Reset to snake draw</button>':''}<div class="seg">${[['auto','Snake seeding'],['manual','Assign manually']].map(([k,v])=>`<button data-act="drawmode" data-v="${k}" class="${(manual?'manual':'auto')===k?'on':''}">${v}</button>`).join('')}</div></div></div>
@@ -805,11 +867,11 @@ function stepper(k,v,min,max){return`<div class="step"><button data-act="stp" da
 function vLive(grp,R){const f=grp.format,ids=grp.pairs.map(p=>p.id),ch=champion(grp,R);let h='';
   /* the podium opens as a pop-up: see vPodiumModal */
   if(grp.data.pools)return h+bracketView(grp,R);
-  if(f==='rr'){h+=`<section class="sec"><h3>Standings <span class="note">${ids.length-1} games each · ranked by wins, then point differential, then points scored</span></h3>${table(standings(ids,grp.matches,R),{of:ids.length-1})}</section><section class="sec"><h3>Matches</h3>${rounds(grp,grp.matches,R,grp.data.sits)}</section>`}
+  if(f==='rr'){h+=`<section class="sec"><h3>Standings <span class="note">${ids.length-1} games each · ranked by wins, head-to-head, +/−, then fewest points allowed</span></h3>${rankTable(grp,'all',tableFor(grp,'all',R),{of:ids.length-1,complete:grp.matches.every(m=>R[m.id].done)})}</section><section class="sec"><h3>Matches</h3>${rounds(grp,grp.matches,R,grp.data.sits)}</section>`}
   if(f==='se'){h+=`<section class="sec"><h3>Bracket</h3>${elim(grp,grp.matches,R,seName,'se')}</section>`}
   if(f==='de')h+=deView(grp,R,grp.matches,'',(t,n,b)=>`<section class="sec"><h3>${t}${n?` <span class="note">${n}</span>`:''}</h3>${b}</section>`);
   if(f==='swiss'){const rd=Math.max(...grp.matches.map(m=>m.round)),cm=grp.matches.filter(m=>m.round===rd),done=cm.every(m=>R[m.id].done);const past=grp.matches.filter(m=>m.round<rd);
-    h+=`<div class="two"><section class="sec"><h3>Standings <span class="note">Wins, then Buchholz, then point differential</span></h3>${table(standings(ids,grp.matches,R,{byeWin:true,buch:true}),{buch:true})}</section>
+    h+=`<div class="two"><section class="sec"><h3>Standings <span class="note">Wins, then Buchholz, then point differential</span></h3>${rankTable(grp,'all',tableFor(grp,'all',R),{buch:true})}</section>
     <section class="sec"><h3>Round ${rd} of ${grp.data.total}</h3><div class="grid-m">${cm.map(m=>matchCard(grp,m,R)).join('')}</div>
     <div class="row" style="margin-top:12px">${rd<grp.data.total?`<button class="btn primary" data-act="swissnext" ${done?'':'disabled'}>Pair round ${rd+1}</button><span class="note">${done?'Pairs teams with matching records and skips rematches.':'Enter every score in this round first.'}</span>`:`<span class="note">${done?'All rounds played.':'Final round.'}</span>`}${rd>1?cbtn('undoround','Undo this round','sm ghost danger'):''}</div>
     ${past.length?`<details class="past" style="margin-top:12px"><summary>Earlier rounds</summary>${rounds(grp,past,R)}</details>`:''}</section></div>`}
@@ -818,7 +880,7 @@ function vLive(grp,R){const f=grp.format,ids=grp.pairs.map(p=>p.id),ch=champion(
     ${wait.length?`<p class="wait">Waiting: <b>${esc(nm(wait[0]))}</b> rotates in on court ${cm.length} next round.</p>`:''}
     <div class="row" style="margin-top:12px">${rd<grp.opts.kotcRounds?`<button class="btn primary" data-act="kotcnext" ${done?'':'disabled'}>Move courts · round ${rd+1}</button>`:`<span class="note">${done?'All rounds played.':'Final round.'}</span>`}${rd>1?cbtn('undoround','Undo this round','sm ghost danger'):''}</div>
     ${past.length?`<details class="past" style="margin-top:12px"><summary>Earlier rounds</summary>${rounds(grp,past,R)}</details>`:''}</section>
-    <section class="sec"><h3>Standings <span class="note">Points, then point differential</span></h3>${table(standings(ids,grp.matches,R,{kc:true}),{kc:true})}</section></div>`}
+    <section class="sec"><h3>Standings <span class="note">Points, then point differential</span></h3>${rankTable(grp,'all',tableFor(grp,'all',R),{kc:true})}</section></div>`}
   if(f==='ladder'){const order=ladderOrder(grp,R),st={};standings(ids,grp.matches,R).forEach(s=>st[s.id]=s);
     const busy=new Set();grp.matches.forEach(m=>{if(!R[m.id].done){busy.add(m.srcA.id);busy.add(m.srcB.id)}});
     const pending=grp.matches.filter(m=>!R[m.id].done),done=grp.matches.filter(m=>R[m.id].done).reverse();
@@ -992,15 +1054,15 @@ function semiSetup(grp,R){const F=semiField(grp,R),mode=grp.opts.semiSeed||'rank
   h+=`<div class="row" style="margin-top:12px"><button class="btn primary" data-act="seedsemi" ${prob?'disabled':''}>Start ${K===1?'final':K===2?'semifinals':'knockout'}</button>${prob?`<span class="err">${esc(prob)}</span>`:`<span class="note">${{rank:`Higher ${word} finish gets the better seed. Same-${word} teams are kept apart.`,diff:'Seeded by point differential from bracket and quarterfinal games.',manual:'Pick the two pairs for each match.'}[mode]}</span>`}</div>`;
   return h}
 function qfSetup(grp,R,left){const word=grp.format==='pool'?'Pool':'Bracket',lw=word.toLowerCase(),G=grp.data.pools.length,mode=grp.opts.qfSeed||'std';
-  const QK=qfCountOf(grp);
+  const QK=qfCountOf(grp),hold=!left&&tieProblem(grp,R);
   let h=`<div class="row" style="margin-bottom:12px;align-items:center"><span class="lbl">Matches</span>${stepper('qfCount',QK,2,Math.max(2,Math.floor(grp.pairs.length/2)))}<span class="lbl">Matchups</span>${qfSeg(mode)}</div>`;
-  if(mode==='manual'&&!left){const tags=tagMap(grp,R),pr=qfPairs(grp,R),prob=qfProblem(pr),picked=new Set(pr.flat().filter(Boolean));
-    const lists=grp.data.pools.map((pl,g)=>standings(pl,poolMs(grp,g),R));
+  if(mode==='manual'&&!left&&!hold){const tags=tagMap(grp,R),pr=qfPairs(grp,R),prob=qfProblem(pr),picked=new Set(pr.flat().filter(Boolean));
+    const lists=grp.data.pools.map((pl,g)=>ranked(grp,'b'+g,pl,poolMs(grp,g),R));
     const sel=(i,j,cur)=>`<select class="gsel msel" id="mq_${grp.id}_${i}_${j}" data-act="mqf" data-i="${i}" data-j="${j}" aria-label="Quarterfinal ${i+1}, side ${j+1}"><option value="" ${!cur?'selected':''}>Pick a pair</option>${lists.map((st,g)=>`<optgroup label="${word} ${LET[g]}">${st.map(s=>`<option value="${s.id}" ${cur===s.id?'selected':''}>${tags[s.id]} · ${esc(nm(s.id))}${picked.has(s.id)&&cur!==s.id?' (picked)':''}</option>`).join('')}</optgroup>`).join('')}</select>`;
     h+=`<div class="semis">${pr.map((p,i)=>`<div class="semi"><b>Quarterfinal ${i+1}</b><div class="semip">${sel(i,0,p[0])}<span class="vs">vs</span>${sel(i,1,p[1])}</div></div>`).join('')}</div>
     <div class="row" style="margin-top:12px"><button class="btn primary" data-act="seedpo" ${prob?'disabled':''}>Start quarterfinals</button><button class="btn sm ghost" data-act="qfstd">${QK===2*G?'Reset to 1 vs 4 · 2 vs 3':'Reset to seeded pairing'}</button>${prob?`<span class="err">${esc(prob)}</span>`:`<span class="note">Tags show each pair's ${lw} and finish, e.g. A1 = 1st in ${word} A.</span>`}</div>`}
   else h+=`<p class="preview" style="margin-bottom:12px"><b>Plan</b>${esc(bqPreview(G,grp.opts.semiSeed||'rank',grp.opts.bronze,mode,QK))}</p>
-    <div class="row">${mode==='manual'?'':`<button class="btn primary" data-act="seedpo" ${left?'disabled':''}>Start quarterfinals</button>`}<span class="note">${left?`${left} ${lw} match${left>1?'es':''} left before the quarterfinals.${mode==='manual'?' You can pick the matchups once they are scored.':''}`:`Uses the final ${lw} standings.`}</span></div>`;
+    <div class="row">${mode==='manual'?'':`<button class="btn primary" data-act="seedpo" ${left||hold?'disabled':''}>Start quarterfinals</button>`}<span class="note">${hold?`<span class="err">${esc(hold)}</span>`:left?`${left} ${lw} match${left>1?'es':''} left before the quarterfinals.${mode==='manual'?' You can pick the matchups once they are scored.':''}`:`Uses the final ${lw} standings.`}</span></div>`;
   return h}
 function bqSection(grp,R,left,pms){const word=grp.format==='pool'?'Pool':'Bracket',bq=grp.matches.filter(m=>m.bq),G=grp.data.pools.length,bqLeft=bq.filter(m=>!R[m.id].done).length,K=Math.log2(pow2(2*G));
   let h=`<section class="sec"><h3>${word} quarterfinals <span class="note">${(bq.length?grp.data.qfMode==='manual':qfManual(grp))?'Matchups assigned manually':(bq.length?grp.data.qfMode==='std':qfInBracket(grp))?`1st vs 4th and 2nd vs 3rd in each ${word.toLowerCase()}`:'Seeded across brackets: highest vs lowest'}</span>${bq.length&&!pms.length?cbtn('undobq','Undo quarterfinals','sm ghost danger'):''}</h3>`;
@@ -1016,17 +1078,17 @@ function bqSection(grp,R,left,pms){const word=grp.format==='pool'?'Pool':'Bracke
     h+='</section>'}
   return h}
 function bracketView(grp,R){const word=grp.format==='pool'?'Pool':'Bracket',po=hasPlayoff(grp),adv=po?(isBQ(grp)?(qfInBracket(grp)&&!qfManual(grp)?4:0):grp.opts.advance):0;
-  const pm=grp.matches.filter(m=>m.stage==='pool'),pms=grp.matches.filter(m=>m.po),left=pm.filter(m=>!R[m.id].done).length;
-  let h=`<div class="pools">${grp.data.pools.map((pl,pi)=>{const ms=pm.filter(m=>m.pool===pi);const st=standings(pl,ms,R);const gDone=ms.every(m=>R[m.id].done);
-    return`<section class="sec"><h3>${word} ${LET[pi]} <span class="note">${pl.length} pairs · ${pl.length-1} games each${po?(isBQ(grp)?(adv?' · top 4 play quarterfinals':' · quarterfinals next'):` · top ${adv} advance`):gDone?` · winner: ${esc(nm(st[0].id))}`:''}</span></h3>${table(st,{adv,of:pl.length-1})}<div style="margin-top:14px">${rounds(grp,ms,R,grp.data.sits[pi])}</div></section>`}).join('')}</div>`;
+  const pm=grp.matches.filter(m=>m.stage==='pool'),pms=grp.matches.filter(m=>m.po),left=pm.filter(m=>!R[m.id].done).length,hold=!left&&tieProblem(grp,R);
+  let h=`<div class="pools">${grp.data.pools.map((pl,pi)=>{const ms=pm.filter(m=>m.pool===pi);const st=ranked(grp,'b'+pi,pl,ms,R);const gDone=ms.every(m=>R[m.id].done);
+    return`<section class="sec"><h3>${word} ${LET[pi]} <span class="note">${pl.length} pairs · ${pl.length-1} games each${po?(isBQ(grp)?(adv?' · top 4 play quarterfinals':' · quarterfinals next'):` · top ${adv} advance`):gDone?` · winner: ${esc(nm(st[0].id))}`:''}</span></h3>${rankTable(grp,'b'+pi,st,{adv,of:pl.length-1,complete:gDone})}<div style="margin-top:14px">${rounds(grp,ms,R,grp.data.sits[pi])}</div></section>`}).join('')}</div>`;
   if(!po)return h;
   if(isBQ(grp))return h+bqSection(grp,R,left,pms);
   const fmt=grp.data.poFmt||grp.opts.poFormat||'se';
   h+=`<section class="sec"><h3>Play-off ${pms.length?`<span class="note">${PO_FMT[fmt]} · ${Object.keys(grp.data.poTags||{}).length} pairs</span>${cbtn('reseed','Re-seed from brackets','sm')}`:''}</h3>`;
   if(!pms.length){const G=grp.data.pools.length;
     h+=`<p class="preview" style="margin-bottom:12px"><b>Plan</b>${esc(playoffPreview(G,adv,fmt==='de'&&G*adv<3?'se':fmt,grp.opts.poSeed||'cross',grp.opts.bronze))}</p>
-    <div class="row"><button class="btn primary" data-act="seedpo" ${left?'disabled':''}>Seed play-off</button><span class="note">${left?`${left} bracket match${left>1?'es':''} left before seeding.`:`Uses the final ${word.toLowerCase()} standings. Tags like A1 show each pair's ${word.toLowerCase()} and finish.`}</span></div>`}
-  else if(fmt==='rr'){const ids=Object.keys(grp.data.poTags||{});h+=`${table(standings(ids,pms,R))}<div style="margin-top:14px">${rounds(grp,pms,R)}</div>`}
+    <div class="row"><button class="btn primary" data-act="seedpo" ${left||hold?'disabled':''}>Seed play-off</button><span class="note">${left?`${left} bracket match${left>1?'es':''} left before seeding.`:hold?`<span class="err">${esc(hold)}</span>`:`Uses the final ${word.toLowerCase()} standings. Tags like A1 show each pair's ${word.toLowerCase()} and finish.`}</span></div>`}
+  else if(fmt==='rr'){h+=`${rankTable(grp,'po',tableFor(grp,'po',R),{complete:pms.every(m=>R[m.id].done)})}<div style="margin-top:14px">${rounds(grp,pms,R)}</div>`}
   else if(fmt==='de')h+=deView(grp,R,pms,'po',(t,n,b)=>`<div class="subsec"><div class="rndh"><b>${t}</b><span class="note">${n}</span></div>${b}</div>`);
   else h+=elim(grp,pms,R,seName,'po');
   return h+'</section>'}
@@ -1093,7 +1155,7 @@ document.addEventListener('click',e=>{const t=e.target.closest('[data-act]');if(
       if(drawProblem(grp))break;const G=bracketCount(grp);o.advance=Math.max(1,Math.min(o.advance,...bracketAssign(grp,G).map(g=>g.length)));startGroup(grp);break}
     case'drawmode':{const G=bracketCount(grp);if(t.dataset.v==='manual'&&grp.opts.drawMode!=='manual')grp.pairs.forEach((p,i)=>p.g=pairBracket(grp,p,i,G));grp.opts.drawMode=t.dataset.v;break}
     case'drawsnake':{const G=bracketCount(grp);grp.pairs.forEach((p,i)=>p.g=snakeIdx(i,G));break}
-    case'seedpo':{const R=resolve(grp);grp.matches=grp.matches.filter(m=>!m.po&&!m.bq);if(isBQ(grp))startBQ(grp,R);else buildPlayoff(grp,R);break}
+    case'seedpo':{const R=resolve(grp);if(tieProblem(grp,R))break;grp.matches=grp.matches.filter(m=>!m.po&&!m.bq);if(isBQ(grp))startBQ(grp,R);else buildPlayoff(grp,R);break}
     case'seedsemi':startSemis(grp,resolve(grp));break;
     case'qfstd':grp.data.qfManual=null;break;
     case'undobq':grp.matches=grp.matches.filter(m=>!m.po&&!m.bq);grp.data.poTags={};grp.data.manual=null;grp.data.poFmt=null;break;
@@ -1105,6 +1167,11 @@ document.addEventListener('click',e=>{const t=e.target.closest('[data-act]');if(
     case'chalto':{const n=grp.matches.length+1;grp.matches.push(mk('ld',n,0,P(t.dataset.a),P(t.dataset.b),`Challenge ${n}`));ui.challenge=null;break}
     case'chaldel':grp.matches=grp.matches.filter(m=>m.id!==t.dataset.m);break;
     case'savenow':cloudSave();return;
+    case'rkedit':{const R=resolve(grp);ui.rkEdit=grp.id+':'+t.dataset.k;ui.rkDraft=tableFor(grp,t.dataset.k,R).map(s=>s.id);render();return}
+    case'rkup':case'rkdn':{const i=+t.dataset.i,j=act==='rkup'?i-1:i+1,d=ui.rkDraft;if(d&&d[j]!==undefined){[d[i],d[j]]=[d[j],d[i]]}render();return}
+    case'rkcancel':ui.rkEdit=null;ui.rkDraft=null;render();return;
+    case'rksave':{grp.data.rankOv=grp.data.rankOv||{};grp.data.rankOv[t.dataset.k]=(ui.rkDraft||[]).slice();ui.rkEdit=null;ui.rkDraft=null;break}
+    case'rkreset':{const k=t.dataset.confirm.split(':').slice(2).join(':');if(grp.data.rankOv)delete grp.data.rankOv[k];break}
     case'ctadd':addCourt();break;
     case'ctdel':removeCourt(t.dataset.id);break;
     case'ctclear':ui.ctErr=assignCourt(t.dataset.g,t.dataset.m,'');break;
