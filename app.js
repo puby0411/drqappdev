@@ -1,11 +1,14 @@
 const {
   useState,
   useEffect,
-  useRef
+  useRef,
+  useMemo
 } = React;
-const LEVELS = ['Open', 'Beginner', 'Low-Int', 'Intermediate', 'High-Int', 'Advanced'];
+const LEVELS = ['Beginner', 'Low-Int', 'Intermediate', 'High-Int', 'Advanced'];
+// Level used for new players, unrecognised Excel values, and any player
+// still saved with the old "Open" level (which has been removed).
+const DEFAULT_LEVEL = 'Intermediate';
 const LEVEL_SHORT = {
-  'Open': 'OPEN',
   'Beginner': 'BEG',
   'Low-Int': 'L-INT',
   'Intermediate': 'INT',
@@ -13,7 +16,6 @@ const LEVEL_SHORT = {
   'Advanced': 'ADV'
 };
 const LEVEL_IDX = {
-  'Open': -1,
   'Beginner': 0,
   'Low-Int': 1,
   'Intermediate': 2,
@@ -21,7 +23,6 @@ const LEVEL_IDX = {
   'Advanced': 4
 };
 const BADGE_CLASS = {
-  'Open': 'badge-open',
   'Beginner': 'badge-beg',
   'Low-Int': 'badge-li',
   'Intermediate': 'badge-int',
@@ -31,7 +32,7 @@ const BADGE_CLASS = {
 const TIME_OPTIONS = [15, 20, 24, 30];
 const MATCH_MODES = ['Same Level', 'Skill Based', 'Open Level', 'OP Multi Group', 'OP Meet', 'Team Based', 'Manual'];
 // ── PIN authentication ──────────────────────────────────────────────────
-// The Superadmin PIN (72890) is never stored in plaintext — only its hash
+// The Superadmin PIN is never stored in plaintext — only its hash
 // is kept here, and every login attempt is hashed the same way before
 // comparing. Uses a simple synchronous hash (not crypto.subtle) so it keeps
 // working even when this file is opened directly (file://) or served over
@@ -123,13 +124,31 @@ const INIT_PLAYERS = [{
 // localStorage so a page refresh doesn't wipe out live data. This is separate
 // from the explicit "Save Session" / "Load Session" feature, which snapshots
 // named sessions the user chooses to keep.
+// Replace the removed "Open" level on any player object found anywhere in
+// saved data (waitlist, Player List, courts, history, requested games...).
+const migrateLevels = data => {
+  const walk = v => {
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === 'object') {
+      const out = {};
+      for (const k of Object.keys(v)) out[k] = walk(v[k]);
+      if (out.level === 'Open' || (out.name !== undefined && out.level !== undefined && !LEVELS.includes(out.level))) out.level = DEFAULT_LEVEL;
+      return out;
+    }
+    return v;
+  };
+  return walk(data);
+};
+let _liveStateCache = undefined;
 const loadLiveState = () => {
+  if (_liveStateCache !== undefined) return _liveStateCache;
   try {
     const raw = localStorage.getItem('dr_live_state');
-    return raw ? JSON.parse(raw) : null;
+    _liveStateCache = raw ? migrateLevels(JSON.parse(raw)) : null;
   } catch {
-    return null;
+    _liveStateCache = null;
   }
+  return _liveStateCache;
 };
 
 function LevelBadge({
@@ -250,7 +269,7 @@ function PlayerListTab({
 }) {
   const [plEditId, setPlEditId] = useState(null);
   const [plEditName, setPlEditName] = useState('');
-  const [plEditLevel, setPlEditLevel] = useState('Open');
+  const [plEditLevel, setPlEditLevel] = useState(DEFAULT_LEVEL);
   const [plEditGroup, setPlEditGroup] = useState('');
   const [plEditTeam, setPlEditTeam] = useState('');
   const [plEditGender, setPlEditGender] = useState('M');
@@ -269,11 +288,22 @@ function PlayerListTab({
       showNotif(`${p.name} is already in the waitlist`);
       return;
     }
+    const onCourtPlayers = (courts || []).flatMap(c => c.players ? [...c.players.teamA, ...c.players.teamB] : []);
+    if (onCourtPlayers.some(q => q.id === p.id || (q.name || '').toLowerCase() === p.name.toLowerCase())) {
+      showNotif(`${p.name} is currently playing on a court`);
+      return;
+    }
     if (onJoin) onJoin(p.id);
-    setQueue(prev => [...prev, {
-      ...p,
-      queuedAt: Date.now()
-    }]);
+    setQueue(prev => {
+      // Only keep a fixed partner link if that partner is in the session
+      // (waiting or on court).
+      const partnerQueued = p.partnerId && (prev.some(q => q.id === p.partnerId) || onCourtPlayers.some(q => q.id === p.partnerId));
+      return [...prev, {
+        ...p,
+        partnerId: partnerQueued ? p.partnerId : null,
+        queuedAt: Date.now()
+      }];
+    });
     showNotif(`${p.name} added to Waitlist!`);
   };
   const removeFromPlayerList = id => {
@@ -972,10 +1002,12 @@ function normalizeCourts(savedCourts, fallbackNumCourts) {
         players: existing.players ?? null,
         startTime: existing.startTime ?? null,
         enabled: existing.enabled !== undefined ? existing.enabled : id <= n,
-        rrMatchId: existing.rrMatchId ?? null
+        rrMatchId: existing.rrMatchId ?? null,
+        staged: !!existing.staged && !!existing.players,
+        stagedReq: existing.stagedReq ?? null
       };
     }
-    return { id, players: null, startTime: null, enabled: false, rrMatchId: null };
+    return { id, players: null, startTime: null, enabled: false, rrMatchId: null, staged: false, stagedReq: null };
   });
 }
 
@@ -1019,10 +1051,10 @@ function GroupListTab({
     }
     if (editId) {
       setPlayGroups(prev => prev.map(s => s.id === editId ? { ...s, name: name.trim(), courtIds } : s));
-      showNotif(`Session "${name.trim()}" updated!`);
+      showNotif(`Group "${name.trim()}" updated!`);
     } else {
       setPlayGroups(prev => [...prev, { id: uid(), name: name.trim(), courtIds }]);
-      showNotif(`Session "${name.trim()}" added!`);
+      showNotif(`Group "${name.trim()}" added!`);
     }
     // Auto-enable any courts assigned to a session so they're immediately usable
     setCourts(prev => prev.map(c => courtIds.includes(c.id) ? { ...c, enabled: true } : c));
@@ -1684,7 +1716,7 @@ function UserManagementTab({
       marginBottom: 10
     }
   }), /*#__PURE__*/React.createElement("input", {
-    placeholder: editId ? "New PIN (leave blank to view unchanged)" : "PIN (4\u20136 digits)",
+    placeholder: editId ? "New PIN (leave blank to keep unchanged)" : "PIN (4\u20136 digits)",
     value: pin,
     onChange: e => setPin(e.target.value.replace(/\D/g, '').slice(0, 6)),
     inputMode: "numeric",
@@ -1795,11 +1827,46 @@ function App() {
   // Open Level: when on (default), the algorithm forces a mixed-doubles round
   // after 2 consecutive same-gender rounds. When off, it never forces mixed —
   // gender composition is left entirely to whatever combo scores best.
-  const [forceMixedEnabled, setForceMixedEnabled] = useState(true);
+  // The Forced Mixed Rotation toggle was removed. OP Multi Group / OP Meet
+  // keep the rotation on (the previous default); Open Level doesn't use it.
+  const forceMixedEnabled = true;
   // When true, pairing/opponent freshness is checked BEFORE wait-time priority
   // in match selection (all modes). Default false preserves original behavior
   // where wait time is protected first and freshness only breaks ties.
   const [prioritizeFreshness, setPrioritizeFreshness] = useState(false);
+  // Open Level "Stricter Level": prefer matches where all 4 players are within
+  // one level of each other (e.g. no Beginner and Intermediate on the same
+  // court), among the players already in the waiting group. Remembered on
+  // this computer.
+  const [strictLevel, setStrictLevel] = useState(() => {
+    try {
+      return localStorage.getItem('dr_strict_level') === '1';
+    } catch {
+      return false;
+    }
+  });
+  // Open Level "Avoid 3W+1M": prefer matches that aren't 3 women + 1 man,
+  // among the players already in the waiting group. On by default; remembered
+  // on this computer.
+  const [avoid3W1M, setAvoid3W1M] = useState(() => {
+    try {
+      return localStorage.getItem('dr_avoid_3w1m') !== '0';
+    } catch {
+      return true;
+    }
+  });
+  const toggleAvoid3W1M = on => {
+    setAvoid3W1M(on);
+    try {
+      localStorage.setItem('dr_avoid_3w1m', on ? '1' : '0');
+    } catch {}
+  };
+  const toggleStrictLevel = on => {
+    setStrictLevel(on);
+    try {
+      localStorage.setItem('dr_strict_level', on ? '1' : '0');
+    } catch {}
+  };
   const [queue, setQueue] = useState(() => loadLiveState()?.queue ?? INIT_PLAYERS);
   const [courts, setCourts] = useState(() => {
     const saved = loadLiveState();
@@ -1809,10 +1876,10 @@ function App() {
   const numCourts = courts.filter(c => c.enabled).length;
   const [history, setHistory] = useState(() => loadLiveState()?.history ?? []);
   const [newName, setNewName] = useState('');
-  const [newLevel, setNewLevel] = useState('Open');
+  const [newLevel, setNewLevel] = useState(DEFAULT_LEVEL);
   const [newGender, setNewGender] = useState('M');
   const [newPartnerName, setNewPartnerName] = useState('');
-  const [newPartnerLevel, setNewPartnerLevel] = useState('Open');
+  const [newPartnerLevel, setNewPartnerLevel] = useState(DEFAULT_LEVEL);
   const [newPartnerGender, setNewPartnerGender] = useState('M');
   const [addingPair, setAddingPair] = useState(false);
   // OP Multi Group: named groups, each with its own assigned courts.
@@ -1881,6 +1948,22 @@ function App() {
   };
   const [notification, setNotification] = useState(null);
   const [activeTab, setActiveTab] = useState('courts');
+  // Show/hide the top section (title, session bar, stats, controls).
+  // Remembered on this computer.
+  const [topCollapsed, setTopCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('dr_top_collapsed') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleTop = () => setTopCollapsed(v => {
+    const nv = !v;
+    try {
+      localStorage.setItem('dr_top_collapsed', nv ? '1' : '0');
+    } catch {}
+    return nv;
+  });
   useEffect(() => {
     if (matchMode === 'Team Based' && ['queue', 'playerlist', 'requests'].includes(activeTab)) {
       setActiveTab('courts');
@@ -1991,7 +2074,43 @@ function App() {
   const ghKey = ids => [...ids].sort().join('|');
   const ghGet = ids => groupHistory.current[ghKey(ids)] || 0;
 
+  // ── Opponent repeat badge ────────────────────────────────────────────
+  // One badge per opponent matchup that has happened before. Shown on the
+  // Team A player's row, naming the Team B player they've faced, so each
+  // matchup appears once (a court typically shows 0–2). Display only — it
+  // doesn't change matchmaking.
+  const shortName = n => {
+    const str = String(n || '');
+    return str.length > 10 ? str.slice(0, 9) + '…' : str;
+  };
+  const opponentBadges = (p, otherTeam) => (otherTeam || []).filter(x => x && opponentGet(p.id, x.id) > 0).map(x => {
+    const n = opponentGet(p.id, x.id);
+    return /*#__PURE__*/React.createElement("span", {
+      key: 'opp-' + x.id,
+      title: `${p.name} has faced ${x.name} as an opponent ${n} time${n !== 1 ? 's' : ''} before`,
+      style: {
+        fontSize: 9,
+        fontWeight: 800,
+        background: 'var(--red-dim, rgba(244,67,54,0.15))',
+        color: 'var(--red, #f44336)',
+        borderRadius: 10,
+        padding: '1px 5px',
+        border: '1px solid var(--red, #f44336)',
+        flexShrink: 0,
+        whiteSpace: 'nowrap'
+      }
+    }, "⚔️ ", shortName(x.name), " ×", n);
+  });
+
+  // Last-game tracking: which game each player most recently played in, so
+  // matchmaking can avoid re-uniting players who just shared a court.
+  const lastGameRef = useRef({}); // { playerId: gameSeq }
+  const gameSeqRef = useRef(0);
   const phRecord = (teamA, teamB) => {
+    gameSeqRef.current += 1;
+    [...teamA, ...teamB].forEach(p => {
+      lastGameRef.current[p.id] = gameSeqRef.current;
+    });
     const bumpPartner = (a, b) => {
       const k = phKey(a, b);
       partnerHistory.current[k] = (partnerHistory.current[k] || 0) + 1;
@@ -2023,9 +2142,16 @@ function App() {
   // On mount, if history was restored from the autosaved live state, rebuild
   // the pairing-history/games-played/join-round tracking refs from it so
   // matchmaking freshness scoring stays accurate after a page refresh.
-  useEffect(() => {
+  // Done synchronously during the FIRST render (not in an effect) so the
+  // 🔁 / ⚔️ / ×N badges are correct immediately after a refresh — refs
+  // changing inside an effect don't trigger a re-render.
+  const rebuiltOnLoadRef = useRef(false);
+  if (!rebuiltOnLoadRef.current) {
+    rebuiltOnLoadRef.current = true;
     if (history && history.length) {
       partnerHistory.current = {};
+    lastGameRef.current = {};
+    gameSeqRef.current = 0;
       opponentHistory.current = {};
       groupHistory.current = {};
       gamesPlayedRef.current = {};
@@ -2040,8 +2166,7 @@ function App() {
         roundsFiredRef.current = idx + 1;
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }
 
   // Score a candidate match: sum of all pairings among the 4 players.
   // Lower = fresher. Partner pairs weighted 2× to more strongly avoid
@@ -2146,6 +2271,14 @@ function App() {
 
   // Send alert overlay to the preview window instead of opening a separate popup.
   // If the preview window isn't open yet, open it first then send the alert once ready.
+  // Courts as the preview screen should see them: a game that has been SET
+  // but not started yet is shown as an open court.
+  const previewCourts = () => courts.filter(c => c.enabled).map(c => c.staged ? {
+    ...c,
+    players: null,
+    startTime: null
+  } : c);
+  const isLive = c => !!c.players && !c.staged;
   const sendAlertToPreview = (courtId, teamA, teamB) => {
     const payload = {
       type: 'DR_ALERT',
@@ -2173,61 +2306,29 @@ function App() {
   // Auto-open preview window when a court becomes active (game started), if autoPreview is on
   // Auto-open alert window when a court becomes active, if autoAlert is on
   useEffect(() => {
-    const prevActive = prevCourtsRef.current.filter(c => c.players).length;
-    const nowActive = courts.filter(c => c.players).length;
+    // Only games that have actually STARTED count (a set-but-not-started
+    // game doesn't open the preview or fire the alert yet).
+    const prevActive = prevCourtsRef.current.filter(isLive).length;
+    const nowActive = courts.filter(isLive).length;
     if (nowActive > prevActive) {
       if (autoPreview) openPreviewWindow();
       if (autoAlert) {
-        const newCourt = courts.find(c => c.players && !prevCourtsRef.current.find(pc => pc.id === c.id && pc.players));
+        const newCourt = courts.find(c => isLive(c) && !prevCourtsRef.current.find(pc => pc.id === c.id && isLive(pc)));
         if (newCourt) sendAlertToPreview(newCourt.id, newCourt.players.teamA, newCourt.players.teamB);
       }
     }
     prevCourtsRef.current = courts;
   }, [courts, autoPreview, autoAlert]);
 
-  // Listen for preview window signalling it's ready, then push current state
-  useEffect(() => {
-    const handler = e => {
-      if (e.data && e.data.type === 'DR_PREVIEW_READY' && previewWinRef.current && !previewWinRef.current.closed) {
-        try {
-          previewWinRef.current.postMessage({
-            type: 'DR_PREVIEW_UPDATE',
-            courts: courts.filter(c => c.enabled),
-            gameTime,
-            sessionName,
-            lightMode,
-            upNext: computeUpNext()
-          }, '*');
-        } catch (err) {}
-      }
-    };
-    window.addEventListener('message', handler);
-    return () => window.removeEventListener('message', handler);
-  }, [courts, gameTime, sessionName, showUpNext, lightMode]);
-
-  // Push state to preview window whenever courts/gameTime/sessionName change
-  useEffect(() => {
-    if (previewWinRef.current && !previewWinRef.current.closed) {
-      try {
-        previewWinRef.current.postMessage({
-          type: 'DR_PREVIEW_UPDATE',
-          courts: courts.filter(c => c.enabled),
-          gameTime,
-          sessionName,
-          lightMode,
-          upNext: computeUpNext()
-        }, '*');
-      } catch (e) {}
-    }
-  }, [courts, gameTime, sessionName, showUpNext, lightMode]);
-
   // Compute upNext matches for the preview window — mirrors the Up Next preview logic
   const computeUpNext = () => {
     if (!showUpNext) return [];
-    if (matchMode === 'Manual') return [];
+    if (matchMode === 'Manual' || matchMode === 'Team Based') return [];
     const upNextMatches = [];
     // Cap to first 20 players — avoids O(n⁴) hang with large rosters.
-    let simQueue = queue.slice(0, 20);
+    // OP Multi Group / OP Meet use the full queue (findMatch prunes it
+    // itself), same as Auto Assign, so the preview matches what will fire.
+    let simQueue = matchMode === 'Open Level' || matchMode === 'OP Multi Group' || matchMode === 'OP Meet' ? [...queue] : queue.slice(0, 20);
     let simAssignCount = assignCount.current;
     let simSbMixedCount = sbMixedCount.current;
     let simOlStreak = olSameGenderStreak.current;
@@ -2266,11 +2367,11 @@ function App() {
       try {
         previewWinRef.current.postMessage({
           type: 'DR_PREVIEW_UPDATE',
-          courts: courts.filter(c => c.enabled),
+          courts: previewCourts(),
           gameTime,
           sessionName,
           lightMode,
-          upNext: computeUpNext()
+          upNext: upNextMatches
         }, '*');
       } catch (e) {}
       return;
@@ -2282,7 +2383,7 @@ function App() {
     const url = URL.createObjectURL(blob);
     const win = window.open(url, 'DinkPreview', 'width=1200,height=750,resizable=yes,scrollbars=yes');
     previewWinRef.current = win;
-    const courtsSnap = courts.filter(c => c.enabled),
+    const courtsSnap = previewCourts(),
       gtSnap = gameTime,
       snSnap = sessionName,
       lmSnap = lightMode;
@@ -2294,7 +2395,7 @@ function App() {
           gameTime: gtSnap,
           sessionName: snSnap,
           lightMode: lmSnap,
-          upNext: computeUpNext()
+          upNext: upNextMatches
         }, '*');
       } catch (e) {}
     };
@@ -2322,11 +2423,13 @@ function App() {
     --border: #1e3a6a; --text-muted: #6a8cb4;
     --text-main: #e8f0fe;
   }
+  html, body { height: 100%; }
   body {
     font-family: 'Segoe UI', system-ui, sans-serif;
     background: #060f20;
     color: var(--text-main);
-    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden; /* the TV view never scrolls — cards shrink to fit instead */
     display: flex;
     flex-direction: column;
   }
@@ -2339,25 +2442,56 @@ function App() {
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
   }
-  header h1 { font-size: 22px; font-weight: 900; color: var(--green); letter-spacing: 1px; text-transform: uppercase; }
+  header h1 { font-size: clamp(15px, 1.15vw, 22px); font-weight: 900; color: var(--green); letter-spacing: 1px; text-transform: uppercase; }
   header .subtitle { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-  #clock { font-size: 20px; font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; }
-  #courts-grid {
-    flex: 1;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 18px;
-    padding: 22px 24px;
-    align-content: start;
+  /* Big centred clock: header is 3 columns (title | clock | spacer) so the
+     clock stays in the middle of the screen. Sizes scale with the screen
+     width — about 96px digits on a 1920px TV. */
+  header.has-clock { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; padding: 10px 28px; }
+  #clock { display: flex; flex-direction: column; align-items: center; line-height: 1; }
+  #clock-time {
+    font-family: 'Consolas', 'SF Mono', 'Menlo', 'Courier New', monospace;
+    font-size: clamp(36px, min(5vw, 8.5vh), 110px); font-weight: 800; color: var(--gold); letter-spacing: 0.04em;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+    text-shadow: 0 0 18px rgba(255, 214, 0, 0.35);
   }
+  #clock-time .colon { animation: clock-blink 1s steps(1) infinite; }
+  #clock-time .ampm { font-size: 0.3em; margin-left: 0.25em; letter-spacing: 1px; vertical-align: 0.9em; }
+  #clock-date { margin-top: 0.35em; font-size: clamp(12px, min(1.25vw, 2.2vh), 26px); font-weight: 800; color: var(--text-muted); letter-spacing: 0.12em; text-transform: uppercase; white-space: nowrap; }
+  .header-spacer { min-width: 0; }
+  @keyframes clock-blink { 50% { opacity: 0.25; } }
+  body.light-theme #clock-time { text-shadow: none; }
+  /* TV layout: courts fill the screen in an even grid (e.g. 6 courts =
+     3 × 2), Up Next cards sit in a column on the right. JS picks the
+     number of columns and a text scale (--s) so cards and names grow to
+     use the available space. */
+  #layout { flex: 1; display: flex; gap: 18px; padding: 20px 24px; min-height: 0; }
+  #courts-grid {
+    --s: 1;
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr));
+    grid-auto-rows: minmax(0, 1fr);
+    gap: 18px;
+    align-content: stretch;
+    overflow: hidden;
+  }
+  #courts-grid .court-card { min-height: 0; overflow: hidden; }
+  #upnext-col { --s: 1; width: clamp(260px, 22vw, 440px); flex-shrink: 0; display: flex; flex-direction: column; gap: 18px; overflow: hidden; min-height: 0; }
+  #upnext-col .court-card { min-height: 0; }
+  #upnext-col .court-header { gap: 6px; }
+  #upnext-col .court-num { font-size: calc(18px * var(--s)); }
+  #upnext-col .court-header > span:last-child { text-align: right; flex-shrink: 1; min-width: 0; }
+  #upnext-col:empty { display: none; }
   .court-card {
     background: var(--surface);
     border: 2px solid var(--border);
     border-radius: 14px;
-    padding: 18px 20px;
+    padding: calc(18px * var(--s)) calc(20px * var(--s));
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: calc(10px * var(--s));
     transition: border-color 0.3s;
     min-height: 200px;
   }
@@ -2370,7 +2504,8 @@ function App() {
     justify-content: space-between;
   }
   .court-num {
-    font-size: 22px;
+    white-space: nowrap;
+    font-size: calc(22px * var(--s));
     font-weight: 900;
     letter-spacing: 0.5px;
     color: var(--text-main);
@@ -2380,7 +2515,7 @@ function App() {
   .dot-green { background: var(--green); box-shadow: 0 0 8px var(--green); }
   .dot-gray { background: #2a4070; }
   .timer {
-    font-size: 26px;
+    font-size: calc(26px * var(--s));
     font-weight: 900;
     font-variant-numeric: tabular-nums;
     letter-spacing: 1px;
@@ -2389,9 +2524,9 @@ function App() {
   .timer-warn { color: var(--orange); }
   .timer-over { color: var(--red); animation: blink 1s infinite; }
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.35} }
-  .teams { display: flex; flex-direction: column; gap: 6px; }
+  .teams { display: flex; flex-direction: column; gap: calc(6px * var(--s)); flex: 1; justify-content: space-evenly; }
   .team-label {
-    font-size: 10px;
+    font-size: calc(10px * var(--s));
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 1.5px;
@@ -2405,9 +2540,9 @@ function App() {
     gap: 8px;
     background: var(--surface2);
     border-radius: 8px;
-    padding: 8px 12px;
+    padding: calc(8px * var(--s)) calc(12px * var(--s));
   }
-  .player-name-big { font-size: 18px; font-weight: 700; }
+  .player-name-big { font-size: calc(18px * var(--s)); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .badge {
     display: inline-block; padding: 2px 7px; border-radius: 20px;
     font-size: 10px; font-weight: 800; flex-shrink: 0;
@@ -2587,14 +2722,15 @@ function App() {
 </style>
 </he${""}ad>
 <bo${""}dy class="${lightMode ? 'light-theme' : ''}">
-<header>
+<header class="has-clock">
   <div>
     <h1>🏓 DINK Republic — Court Display</h1>
     <div class="subtitle" id="session-name">Live Court View</div>
   </div>
-  <div id="clock">--:--:--</div>
+  <div id="clock"><div id="clock-time">--:--:--</div><div id="clock-date"></div></div>
+  <div class="header-spacer"></div>
 </header>
-<div id="courts-grid"></div>
+<main id="layout"><div id="courts-grid"></div><aside id="upnext-col"></aside></main>
 <footer>Court Preview · Updates automatically from the main app</footer>
 
 <!-- Game-starting alert overlay — triggered via postMessage from main app -->
@@ -2685,8 +2821,13 @@ function buildBadge(level) {
   return '<span class="badge ' + (BADGE_CLASS[level]||'badge-beg') + '">' + (LEVEL_SHORT[level]||level) + '</span>';
 }
 
+// Escape player/team names before inserting them as HTML.
+function esc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function buildPlayerRow(p) {
-  return '<div class="player-row"><span class="player-name-big">' + p.name + '</span></div>';
+  return '<div class="player-row"><span class="player-name-big">' + esc(p.name) + '</span></div>';
 }
 
 function buildPlayerRowPreview(p) {
@@ -2696,12 +2837,46 @@ function buildPlayerRowPreview(p) {
     ? '<span style="font-size:11px;font-weight:800;color:#f06292;background:#2a0818;border:1px solid #e91e6344;border-radius:20px;padding:1px 6px;flex-shrink:0;">♀</span>'
     : '<span style="font-size:11px;font-weight:800;color:#64b5f6;background:#0d2040;border:1px solid #2196f344;border-radius:20px;padding:1px 6px;flex-shrink:0;">♂</span>';
   const lvlBadge = '<span class="badge ' + (LEVEL_BADGE[p.level]||'badge-beg') + '">' + (LEVEL_S[p.level]||p.level) + '</span>';
-  return '<div class="player-row" style="opacity:0.9;">' + genderTag + lvlBadge + '<span class="player-name-big" style="font-size:16px;">' + p.name + '</span></div>';
+  return '<div class="player-row" style="opacity:0.9;">' + genderTag + lvlBadge + '<span class="player-name-big" style="font-size:calc(16px * var(--s));">' + esc(p.name) + '</span></div>';
 }
+
+// Pick an even grid for the number of courts and scale text to fill it.
+// 1–3 courts: one row · 4–8: two rows (6 → 3 × 2, 7–8 → 4 × 2) · 9+: three rows.
+function layoutCourts() {
+  const grid = document.getElementById('courts-grid');
+  const n = Math.max(1, courtsData.length);
+  const cols = n <= 3 ? n : n <= 8 ? Math.ceil(n / 2) : Math.ceil(n / 3);
+  const rows = Math.ceil(n / cols);
+  grid.style.setProperty('--cols', cols);
+  const gap = 18;
+  const cardW = (grid.clientWidth - gap * (cols - 1)) / cols;
+  const cardH = (grid.clientHeight - gap * (rows - 1)) / rows;
+  // A court card at normal size is roughly 340 × 300 px. Start from that
+  // estimate (up to 2× on big screens), then shrink step by step until no
+  // card's content is cut off — so the screen never needs scrolling.
+  const overflows = el => [...el.children].some(c => c.scrollHeight > c.clientHeight + 1) || el.scrollHeight > el.clientHeight + 1;
+  let sc = Math.max(0.45, Math.min(2, cardW / 340, cardH / 300));
+  grid.style.setProperty('--s', sc.toFixed(3));
+  while (sc > 0.45 && overflows(grid)) {
+    sc -= 0.04;
+    grid.style.setProperty('--s', sc.toFixed(3));
+  }
+  // Up Next column: same idea, never larger than normal size.
+  const upCol = document.getElementById('upnext-col');
+  let su = Math.min(1, sc + 0.1);
+  upCol.style.setProperty('--s', su.toFixed(3));
+  while (su > 0.45 && upCol.scrollHeight > upCol.clientHeight + 1) {
+    su -= 0.04;
+    upCol.style.setProperty('--s', su.toFixed(3));
+  }
+}
+window.addEventListener('resize', layoutCourts);
 
 function renderCourts() {
   const grid = document.getElementById('courts-grid');
+  const upCol = document.getElementById('upnext-col');
   grid.innerHTML = '';
+  upCol.innerHTML = '';
 
   // Active / open courts
   courtsData.forEach(court => {
@@ -2754,14 +2929,26 @@ function renderCourts() {
         '<div class="team-b"><div class="team-label" style="color:#3a5a7a;">— TEAM B —</div>' + teamBHTML + '</div>' +
       '</div>' +
       '<div style="font-size:10px;color:#2a4070;text-align:center;margin-top:8px;font-style:italic;">preview · subject to change</div>';
-    grid.appendChild(card);
+    upCol.appendChild(card);
   });
+  layoutCourts();
 }
 
-// Clock
-setInterval(() => {
-  document.getElementById('clock').textContent = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-}, 1000);
+// Digital clock — time (12-hour, blinking colons) and full date
+function pad2(n) { return (n < 10 ? '0' : '') + n; }
+function tickClock() {
+  const d = new Date();
+  const h24 = d.getHours();
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  const colon = '<span class="colon">:</span>';
+  document.getElementById('clock-time').innerHTML =
+    pad2(h12) + colon + pad2(d.getMinutes()) + colon + pad2(d.getSeconds()) +
+    '<span class="ampm">' + (h24 < 12 ? 'AM' : 'PM') + '</span>';
+  document.getElementById('clock-date').textContent =
+    d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+}
+tickClock();
+setInterval(tickClock, 1000);
 
 // Re-render timers every second
 setInterval(renderCourts, 1000);
@@ -2787,7 +2974,7 @@ window.addEventListener('message', (e) => {
       const allPlayers = [...(teamA || []), ...(teamB || [])];
       document.getElementById('alert-court-label').textContent = 'Court ' + courtId;
       document.getElementById('alert-players').innerHTML = allPlayers
-        .map(p => '<div class="alert-player-row"><span class="alert-pname">' + p.name + '</span></div>')
+        .map(p => '<div class="alert-player-row"><span class="alert-pname">' + esc(p.name) + '</span></div>')
         .join('');
       const overlay = document.getElementById('alert-overlay');
       overlay.classList.add('visible');
@@ -2875,7 +3062,7 @@ window.addEventListener('message', (e) => {
       } else {
         body.innerHTML = players.map((p, i) => {
           const cls = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : '';
-          return '<div class="rank-row"><div class="rank-num ' + cls + '">' + (i + 1) + '</div><div class="rank-name">' + p.name + '</div><div class="rank-wins">' + p.wins + ' win' + (p.wins === 1 ? '' : 's') + '</div></div>';
+          return '<div class="rank-row"><div class="rank-num ' + cls + '">' + (i + 1) + '</div><div class="rank-name">' + esc(p.name) + '</div><div class="rank-wins">' + p.wins + ' win' + (p.wins === 1 ? '' : 's') + '</div></div>';
         }).join('');
       }
       // e.data.show === false means this is a background refresh (e.g. a new
@@ -2898,7 +3085,7 @@ window.addEventListener('message', (e) => {
       } else {
         body.innerHTML = teamsList.map((t, i) => {
           const cls = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : '';
-          return '<div class="rank-row"><div class="rank-num ' + cls + '">' + (i + 1) + '</div><div class="rank-name">🤝 ' + t.name + '</div><div class="rank-wins">' + t.wins + ' win' + (t.wins === 1 ? '' : 's') + '</div></div>';
+          return '<div class="rank-row"><div class="rank-num ' + cls + '">' + (i + 1) + '</div><div class="rank-name">🤝 ' + esc(t.name) + '</div><div class="rank-wins">' + t.wins + ' win' + (t.wins === 1 ? '' : 's') + '</div></div>';
         }).join('');
       }
       if (e.data.show !== false) {
@@ -2964,8 +3151,14 @@ renderCourts();
     matchMode,
     queue,
     history,
+    playerList,
+    requestedGames,
     playGroups,
     teams,
+    teamRoster,
+    teamQueue,
+    teamSubMode,
+    rrSchedule,
     courts: courts.map(c => ({
       ...c,
       startTime: c.startTime ? c.startTime : null
@@ -2985,18 +3178,35 @@ renderCourts();
     showNotif(`Session "${snap.name}" saved!`);
     setSessionModal(null);
   };
-  const loadSession = snap => {
+  const loadSession = rawSnap => {
+    const snap = migrateLevels(rawSnap);
     setSessionName(snap.name);
     setSessionStarted(snap.startedAt);
     setGameTime(snap.gameTime);
     setMatchMode(snap.matchMode);
+    if (snap.matchMode && snap.matchMode !== 'Manual') setLastDropdownMode(snap.matchMode);
     setQueue(snap.queue || []);
     setHistory(snap.history || []);
+    // Older saved sessions may not include these — keep the current list rather than wiping it.
+    if (snap.playerList) setPlayerList(snap.playerList);
+    setRequestedGames(snap.requestedGames || []);
     setPlayGroups(snap.playGroups || []);
     setTeams(snap.teams || []);
+    setTeamRoster(snap.teamRoster || []);
+    setTeamQueue(snap.teamQueue || []);
+    setTeamSubMode(snap.teamSubMode || 'Open Play');
+    setRrSchedule(snap.rrSchedule || []);
     setCourts(normalizeCourts(snap.courts, snap.numCourts));
+    setManualCourt(null);
+    setManualSelected([]);
+    setScoreModal(null);
+    setTeamScoreModal(null);
+    assignCount.current = 0;
+    sbMixedCount.current = 0;
     // Rebuild pairing history from saved game history so repeat-avoidance is accurate
     partnerHistory.current = {};
+    lastGameRef.current = {};
+    gameSeqRef.current = 0;
     opponentHistory.current = {};
     groupHistory.current = {};
     gamesPlayedRef.current = {};
@@ -3025,15 +3235,26 @@ renderCourts();
     setQueue([]);
     setHistory([]);
     setPlayerList([]);
+    setRequestedGames([]);
+    setTeamQueue([]);
+    setRrSchedule([]);
     setCourts(prev => prev.map(c => ({
       ...c,
       players: null,
-      startTime: null
+      startTime: null,
+      staged: false,
+      stagedReq: null,
+      rrMatchId: null
     })));
     setManualCourt(null);
     setManualSelected([]);
     setScoreModal(null);
+    setTeamScoreModal(null);
+    assignCount.current = 0;
+    sbMixedCount.current = 0;
     partnerHistory.current = {};
+    lastGameRef.current = {};
+    gameSeqRef.current = 0;
     opponentHistory.current = {};
     groupHistory.current = {};
     gamesPlayedRef.current = {};
@@ -3045,6 +3266,63 @@ renderCourts();
     setLastSaved(null);
     showNotif(`New session "${n}" started!`);
     setSessionModal(null);
+    setActiveTab('courts');
+  };
+  // ── Reset Games ─────────────────────────────────────────────────────
+  // Clears games on courts, history, player stats, requested games and all
+  // pairing/fairness counts, and resets every wait time to now. Keeps the
+  // Player List and the waitlist (players on court go back to the waitlist).
+  const resetGames = () => {
+    const onCourt = courts.filter(c => c.players).length;
+    const msg = `Reset games?\n\nThis will:\n• clear ${onCourt ? onCourt + ' game' + (onCourt === 1 ? '' : 's') + ' on court (players go back to the waitlist)' : 'all courts'}\n• clear History (${history.length} game${history.length === 1 ? '' : 's'}) and Player Stats\n• clear Requested games\n• reset everyone's wait time to now\n\nThe Player List and waitlist are kept. Saved sessions are not affected.`;
+    if (!window.confirm(msg)) return;
+    const now = Date.now();
+    if (matchMode === 'Team Based') {
+      // Teams on court go back to the end of the team queue (Open Play)
+      const courtTeams = courts.filter(c => c.players).flatMap(c => [...c.players.teamA, ...c.players.teamB]);
+      setTeamQueue(prev => {
+        const kept = prev.map(t => ({ ...t, queuedAt: now }));
+        const back = courtTeams.filter(t => t && !kept.some(k => k.id === t.id)).map(t => ({ ...t, queuedAt: now }));
+        return teamSubMode === 'Open Play' ? [...kept, ...back] : kept;
+      });
+      setRrSchedule(prev => prev.map(m => ({ ...m, status: 'pending', winner: null })));
+    } else {
+      const courtPlayers = courts.filter(c => c.players).flatMap(c => [...c.players.teamA, ...c.players.teamB]);
+      setQueue(prev => {
+        const kept = prev.map(p => ({ ...p, queuedAt: now }));
+        const back = courtPlayers.filter(p => p && !kept.some(k => k.id === p.id)).map(p => ({ ...p, queuedAt: now }));
+        return [...kept, ...back];
+      });
+    }
+    setCourts(prev => prev.map(c => ({
+      ...c,
+      players: null,
+      startTime: null,
+      staged: false,
+      stagedReq: null,
+      rrMatchId: null
+    })));
+    setHistory([]);
+    setRequestedGames([]);
+    setManualCourt(null);
+    setManualSelected([]);
+    setScoreModal(null);
+    setTeamScoreModal(null);
+    setReplacingPlayer(null);
+    setRearrangeCourt(null);
+    setCrossCourtSwap(null);
+    assignCount.current = 0;
+    sbMixedCount.current = 0;
+    partnerHistory.current = {};
+    opponentHistory.current = {};
+    groupHistory.current = {};
+    lastGameRef.current = {};
+    gameSeqRef.current = 0;
+    gamesPlayedRef.current = {};
+    joinRoundRef.current = {};
+    roundsFiredRef.current = 0;
+    olSameGenderStreak.current = 0;
+    showNotif('Games reset — history and stats cleared, wait times restarted');
     setActiveTab('courts');
   };
   const deleteSession = (name, e) => {
@@ -3091,9 +3369,7 @@ renderCourts();
     if (!genderValid(tA, tB, mode)) return false;
     if (mode === 'Open Level' || mode === 'Manual' || mode === 'OP Multi Group' || mode === 'OP Meet') return true;
     const all = [...tA, ...tB];
-    // 'Open' level players are wildcards — ignore them in span calc
-    const levels = all.filter(p => p.level !== 'Open').map(p => LEVEL_IDX[p.level]);
-    if (levels.length < 2) return true; // all Open level players, always compatible
+    const levels = all.map(p => LEVEL_IDX[p.level] ?? LEVEL_IDX[DEFAULT_LEVEL]);
     const minLvl = Math.min(...levels);
     const maxLvl = Math.max(...levels);
     const span = maxLvl - minLvl;
@@ -3209,6 +3485,23 @@ renderCourts();
     }
     return null;
   };
+  // ── Open Level search window ─────────────────────────────────────────
+  // How many players from the front of the waitlist Open Level considers.
+  // It grows with the waitlist: everyone queued is considered, up to
+  // OL_MAX_WINDOW. The cap keeps the 4-player combo search fast (the
+  // number of combos grows roughly with n⁴).
+  const OL_MAX_WINDOW = 40;
+  // Open Level: teams whose average levels are within this gap count as
+  // "balanced" (ties), so repeats and wait time decide between them.
+  // 0 = strict balance, 0.5 = default, 1.0 = favour fresh pairings more.
+  const OL_LEVEL_TOLERANCE = 0.5;
+  // Size of the "waiting group" at the front of the line: the 3 players
+  // joining the front player are chosen for freshness from within this group
+  // first. OP Multi Group / OP Meet use a fixed 8.
+  const OL_WAIT_BAND = 8;
+  // Open Level: waiting group size per court in use (group = this × (courts + 1)).
+  const OL_WAIT_PER_COURT = 4;
+  const openLevelWindowSize = n => Math.max(4, Math.min(n, OL_MAX_WINDOW));
   const findMatch = (q, mode, forceMixed = false, priorityIds = null) => {
     if (mode === 'Manual') return null;
 
@@ -3274,8 +3567,13 @@ renderCourts();
       return best;
     };
 
-    // ── OPEN LEVEL MODE ───────────────────────────────────────────────
-    // Search the full queue (capped at 20 for performance).
+    // ── OPEN LEVEL / OP MULTI GROUP / OP MEET ──────────────────────────
+    // All three use the same ranking (see `compare` below): front player
+    // always plays, gender neutral on normal turns, level balance within
+    // OL_LEVEL_TOLERANCE, fewest players from the same last game, waiting
+    // group, foursome repeat, then freshness. OP Multi Group / OP Meet add
+    // their group / team hard rules. The numbered list below is the ORIGINAL
+    // order, kept for reference only.
     // Scoring per combo:
     //   1. Gender balance: only fc===2 (exactly 2 females in the group) is
     //      gated on achieving a properly mixed split. Odd counts (1F or 3F)
@@ -3307,7 +3605,7 @@ renderCourts();
       // of how long the overall waitlist gets.
       let pool;
       if (mode === 'Open Level') {
-        pool = sorted.slice(0, 20);
+        pool = sorted.slice(0, openLevelWindowSize(sorted.length));
       } else if (mode === 'OP Multi Group') {
         const groupCounts = {};
         sorted.forEach(p => {
@@ -3326,7 +3624,7 @@ renderCourts();
       const splits = [[0, 1, 2, 3], [0, 2, 1, 3], [0, 3, 1, 2]];
 
       const levelBalance = (tA, tB) => {
-        const lvl = p => LEVEL_IDX[p.level] ?? 1;
+        const lvl = p => LEVEL_IDX[p.level] ?? LEVEL_IDX[DEFAULT_LEVEL];
         const avgA = tA.reduce((s, p) => s + lvl(p), 0) / tA.length;
         const avgB = tB.reduce((s, p) => s + lvl(p), 0) / tB.length;
         return Math.abs(avgA - avgB);
@@ -3370,7 +3668,15 @@ renderCourts();
           // starves any lone minority-gender player whenever enough same-gender
           // players exist elsewhere to keep forming fc === 0/4 combos instead.
           const genderOk = fc === 2 ? isMixed : true;
-          const wantedGender = forceMixed ? isMixed ? 0 : 1 : isMixed ? 1 : 0;
+          // Open Level: gender is neutral on normal turns — mixed is only
+          // preferred when the rotation is due. Other modes keep the old
+          // behaviour (prefer non-mixed on normal turns).
+          // OP Multi Group / OP Meet: gender is neutral on normal turns and
+          // mixed is preferred when the rotation is due. Open Level has no
+          // mixed rotation at all (it made women play far more games than
+          // men and pulled players from deep in the line) — mixed happens
+          // only when it comes up naturally; rule 1 still splits 2 women.
+          const wantedGender = mode !== 'Open Level' && forceMixed ? isMixed ? 0 : 1 : 0;
           const type = isMixed ? 'mixed' : fc === 4 ? 'womens' : fc === 0 ? 'mens' : 'uneven';
           candidates.push({
             teamA: tA,
@@ -3380,23 +3686,109 @@ renderCourts();
             genderOk,
             wantedGender,
             levelBal: levelBalance(tA, tB),
+            // "Close enough" balance: any gap within OL_LEVEL_TOLERANCE counts as balanced (0)
+            levelBand: levelBalance(tA, tB) <= OL_LEVEL_TOLERANCE + 1e-9 ? 0 : levelBalance(tA, tB),
+            // 3 women + 1 man (ranked lower when Avoid 3W+1M is on)
+            threeW: fc === 3 ? 1 : 0,
+            // 1 woman + 3 men (very soft preference when Stricter Gender is on)
+            oneW: fc === 1 ? 1 : 0,
+            // Soft gender order on balanced nights: men's / women's doubles,
+            // then mixed, then 1 woman + 3 men.
+            gPref: fc === 0 || fc === 4 ? 0 : fc === 2 ? 1 : 2,
+            // Level spread of all 4 players (highest − lowest). 0 or 1 = fine;
+            // 2+ (e.g. Beginner with Intermediate) is ranked lower when
+            // Stricter Level is on.
+            spreadBad: (() => {
+              const ix = players.map(p => LEVEL_IDX[p.level] ?? LEVEL_IDX[DEFAULT_LEVEL]);
+              const sp = Math.max(...ix) - Math.min(...ix);
+              return sp > 1 ? sp : 0;
+            })(),
+            // Most players in this group whose last game was the SAME game
+            // (1 = everyone comes from a different game). Used by Open Level
+            // to stop 3 of the same 4 being re-matched with one person swapped.
+            carry: (() => {
+              const cnt = {};
+              let m = 1;
+              players.forEach(p => {
+                const g = lastGameRef.current[p.id];
+                if (g === undefined) return;
+                cnt[g] = (cnt[g] || 0) + 1;
+                if (cnt[g] > m) m = cnt[g];
+              });
+              return m;
+            })(),
             groupRepeat: ghGet(players.map(p => p.id)),
             waitScore: worstQpos(players),
             fresh: scoreMatch(tA, tB)
           });
         }
         if (!candidates.length) return null;
-        candidates.sort((x, y) => y.genderOk - x.genderOk || x.wantedGender - y.wantedGender || x.levelBal - y.levelBal || x.groupRepeat - y.groupRepeat || (prioritizeFreshness ? (x.fresh - y.fresh) || (x.waitScore - y.waitScore) : (x.waitScore - y.waitScore) || (x.fresh - y.fresh)));
+        candidates.sort(compare);
         return candidates[0];
       };
-      const combos = [];
-      for (let i = 0; i < pool.length - 3; i++) for (let j = i + 1; j < pool.length - 2; j++) for (let k = j + 1; k < pool.length - 1; k++) for (let l = k + 1; l < pool.length; l++) {
-        const c = bestSplitForCombo([pool[i], pool[j], pool[k], pool[l]]);
-        if (c) combos.push(c);
+      // Order used by Open Level, OP Multi Group and OP Meet (the group /
+      // team rules of OP Multi Group and OP Meet are hard rules applied in
+      // bestSplitForCombo above, before any ranking):
+      //   1. gender OK  2. front player (handled by the anchor loop below)
+      //   3. mixed when rotation is due (OP modes only)  4. level balanced within tolerance
+      //   5. just played together — fewest players coming from the same
+      //      previous game (1 = all 4 from different games)
+      //   6. waiting group — all 4 within the first OL_WAIT_BAND in line
+      //   7. foursome repeat (OP modes only)  8. freshness  9. exact wait  10. exact level balance
+      // The front-player rule guarantees the longest-waiting player gets on;
+      // the waiting-group rule stops players who just came off a court from
+      // jumping ahead of people still waiting; within that group the other
+      // 3 spots go to the freshest partners/opponents. In simulation this
+      // cut repeat partnerships by 60–80% vs the old order with no longer
+      // sit-outs. The Wait Priority toggle therefore doesn't change these modes.
+      // In OP Multi Group the "front player" is the longest-waiting player of
+      // the group whose court is being filled (Auto Assign passes only that
+      // group's waitlist); in OP Meet it's the longest-waiting player whose
+      // team can currently form a valid match.
+      // Open Level: the waiting group is 4 × (courts on + 1) — everyone due on
+      // court this round plus one more court's worth. OP modes keep 8.
+      const waitBand = mode === 'Open Level' ? OL_WAIT_PER_COURT * (Math.max(1, courts.filter(c => c.enabled).length) + 1) : OL_WAIT_BAND;
+      const waitTier = c => Math.floor(c.waitScore / waitBand);
+      // Open Level skips the foursome-repeat rule: in simulation it never changed
+      // a single pick, because "just played together" and freshness already
+      // rule those matches out. OP Multi Group / OP Meet keep it.
+      const groupRule = mode === 'Open Level' ? () => 0 : (x, y) => x.groupRepeat - y.groupRepeat;
+      // Stricter Level (Open Level only): ranked just below the waiting group,
+      // so it only separates levels among players already near the front.
+      const spreadRule = mode === 'Open Level' && strictLevel ? (x, y) => x.spreadBad - y.spreadBad : () => 0;
+      // Avoid 3W+1M (Open Level only): same position — only rearranges players
+      // already in the waiting group. If no other option exists, 3W+1M still plays.
+      const threeWRule = mode === 'Open Level' && avoid3W1M ? (x, y) => x.threeW - y.threeW : () => 0;
+      // Also with Stricter Gender: avoid 1 woman + 3 men, but only as a
+      // tiebreak after freshness — it never causes extra repeats.
+      // On balanced nights (40–60% of the players considered are women) the
+      // soft preference is: same gender (men's or women's doubles) > mixed >
+      // 1W+3M. Otherwise only 1W+3M is softly avoided — preferring same-gender
+      // games when one gender is a minority made that gender wait longer.
+      const womenShare = pool.length ? pool.filter(p => p.gender === 'F').length / pool.length : 0;
+      const balancedGender = womenShare >= 0.4 && womenShare <= 0.6;
+      const oneWRule = mode === 'Open Level' && avoid3W1M ? balancedGender ? (x, y) => x.gPref - y.gPref : (x, y) => x.oneW - y.oneW : () => 0;
+      const compare = (x, y) => y.genderOk - x.genderOk || x.wantedGender - y.wantedGender || x.levelBand - y.levelBand || (x.carry - y.carry) || waitTier(x) - waitTier(y) || threeWRule(x, y) || spreadRule(x, y) || groupRule(x, y) || (x.fresh - y.fresh) || oneWRule(x, y) || (x.waitScore - y.waitScore) || x.levelBal - y.levelBal;
+      {
+        // Front-player rule: the longest-waiting player who CAN play is
+        // always in the match. Try the player at the front first; only if
+        // no valid match includes them (e.g. their fixed partner is still on
+        // a court) move on to the next player in line, and so on. Players
+        // skipped this way had no valid match at all, so they're left out
+        // of later searches.
+        for (let a = 0; a < pool.length - 3; a++) {
+          const combos = [];
+          for (let j = a + 1; j < pool.length - 2; j++) for (let k = j + 1; k < pool.length - 1; k++) for (let l = k + 1; l < pool.length; l++) {
+            const c = bestSplitForCombo([pool[a], pool[j], pool[k], pool[l]]);
+            if (c) combos.push(c);
+          }
+          if (combos.length) {
+            combos.sort(compare);
+            return combos[0];
+          }
+        }
+        return null;
       }
-      if (!combos.length) return null;
-      combos.sort((x, y) => y.genderOk - x.genderOk || x.wantedGender - y.wantedGender || x.levelBal - y.levelBal || x.groupRepeat - y.groupRepeat || (prioritizeFreshness ? (x.fresh - y.fresh) || (x.waitScore - y.waitScore) : (x.waitScore - y.waitScore) || (x.fresh - y.fresh)));
-      return combos[0];
     }
 
     // ── SAME LEVEL MODE ───────────────────────────────────────────────
@@ -3478,7 +3870,7 @@ renderCourts();
         const candidates = [];
         for (let i = 0; i < sorted.length - 3; i++) for (let j = i + 1; j < sorted.length - 2; j++) for (let k = j + 1; k < sorted.length - 1; k++) for (let l = k + 1; l < sorted.length; l++) {
           const players = [sorted[i], sorted[j], sorted[k], sorted[l]];
-          const idxs = players.map(p => LEVEL_IDX[p.level] < 0 ? 0 : LEVEL_IDX[p.level]);
+          const idxs = players.map(p => LEVEL_IDX[p.level] ?? LEVEL_IDX[DEFAULT_LEVEL]);
           if (Math.max(...idxs) - Math.min(...idxs) > maxSpan) continue;
           const result = sbTrySplit(players, wantMixed);
           if (result) candidates.push(result);
@@ -3553,11 +3945,18 @@ renderCourts();
     otherPlayerIds.forEach(id => {
       otherBaselines[id] = freshStats[id]?.games || 0;
     });
+    // Also snapshot the 4 requested players' own counts, used by the
+    // Requested Games list to show who has played since the request.
+    const baselineCounts = {};
+    playerIds.forEach(id => {
+      baselineCounts[id] = freshStats[id]?.games || 0;
+    });
     setRequestedGames(prev => [...prev, {
       id: Date.now(),
       playerIds,
       addedAt: Date.now(),
-      otherBaselines // { playerId: gamesAtRequestTime }
+      otherBaselines, // { playerId: gamesAtRequestTime }
+      baselineCounts
     }]);
     showNotif(`Requested game added! Fires after all ${otherPlayerIds.length} other players have had their turn.`);
   };
@@ -3566,41 +3965,90 @@ renderCourts();
   };
 
   // ── Pair-link helpers (set/remove fixed partner on existing players) ──
+  // Cached Up Next result: the combo search only reruns when something that
+  // affects it changes (waitlist, game history, requested games, mode or
+  // settings) — not on every unrelated re-render like toggling a court.
+  // Declared here (after findMatch) because useMemo runs it immediately.
+  const upNextMatches = useMemo(computeUpNext, [showUpNext, matchMode, queue, requestedGames, history, forceMixedEnabled, prioritizeFreshness, strictLevel, avoid3W1M]);
+  // Listen for preview window signalling it's ready, then push current state
+  useEffect(() => {
+    const handler = e => {
+      if (e.data && e.data.type === 'DR_PREVIEW_READY' && previewWinRef.current && !previewWinRef.current.closed) {
+        try {
+          previewWinRef.current.postMessage({
+            type: 'DR_PREVIEW_UPDATE',
+            courts: previewCourts(),
+            gameTime,
+            sessionName,
+            lightMode,
+            upNext: upNextMatches
+          }, '*');
+        } catch (err) {}
+      }
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, [courts, gameTime, sessionName, showUpNext, lightMode, upNextMatches]);
+
+  // Push state to preview window whenever courts/gameTime/sessionName change
+  useEffect(() => {
+    if (previewWinRef.current && !previewWinRef.current.closed) {
+      try {
+        previewWinRef.current.postMessage({
+          type: 'DR_PREVIEW_UPDATE',
+          courts: previewCourts(),
+          gameTime,
+          sessionName,
+          lightMode,
+          upNext: upNextMatches
+        }, '*');
+      } catch (e) {}
+    }
+  }, [courts, gameTime, sessionName, showUpNext, lightMode, upNextMatches]);
+
   const linkPartners = (idA, idB) => {
     const pA = queue.find(p => p.id === idA);
     const pB = queue.find(p => p.id === idB);
-    setQueue(prev => prev.map(p => {
-      if (p.id === idA) return {
-        ...p,
-        partnerId: idB
-      };
-      if (p.id === idB) return {
-        ...p,
-        partnerId: idA
-      };
-      return p;
-    }));
-    if (pA && pB && pA.level !== pB.level && pA.level !== 'Open' && pB.level !== 'Open') {
+    // Apply to both the waitlist and the saved player list so the link survives
+    // re-adding from the Player List. Any previous partner of A or B is unlinked.
+    const relink = list => {
+      const oldPartners = new Set(list.filter(p => p.id === idA || p.id === idB).map(p => p.partnerId).filter(Boolean));
+      return list.map(p => {
+        if (p.id === idA) return { ...p, partnerId: idB };
+        if (p.id === idB) return { ...p, partnerId: idA };
+        if (oldPartners.has(p.id) || p.partnerId === idA || p.partnerId === idB) return { ...p, partnerId: null };
+        return p;
+      });
+    };
+    setQueue(relink);
+    setPlayerList(relink);
+    if (pA && pB && pA.level !== pB.level) {
       showNotif(`Fixed pair linked! Heads up: ${pA.level} + ${pB.level} won't be matched in Same Level mode until levels match.`);
     } else {
       showNotif('Fixed pair linked!');
     }
   };
   const unlinkPartner = id => {
-    setQueue(prev => {
-      const target = prev.find(p => p.id === id);
+    const unlink = list => {
+      const target = list.find(p => p.id === id);
       const partnerId = target?.partnerId;
-      return prev.map(p => {
-        if (p.id === id || p.id === partnerId) return {
+      return list.map(p => {
+        if (p.id === id || p.partnerId === id || (partnerId && p.id === partnerId)) return {
           ...p,
           partnerId: null
         };
         return p;
       });
-    });
+    };
+    setQueue(unlink);
+    setPlayerList(unlink);
     showNotif('Fixed pair removed.');
   };
-  const autoAssign = targetCourtId => {
+  // opts.stage = true → "Set Game": players are placed on the court but the
+  // game isn't started yet (no timer, not shown on the preview screen), so
+  // anyone swapped back to the waitlist keeps their original wait time.
+  // The court card then shows "Start Game" (startStagedGame) to begin it.
+  const autoAssign = (targetCourtId, opts = {}) => {
     if (matchMode === 'Manual') {
       showNotif('Switch to Auto mode or use Assign Manually on a court');
       return;
@@ -3690,13 +4138,17 @@ renderCourts();
       teamB,
       ids
     } = match;
+    const stage = !!opts.stage;
     setCourts(prev => prev.map(c => c.id === open.id ? {
       ...c,
       players: {
         teamA,
         teamB
       },
-      startTime: Date.now()
+      startTime: stage ? null : Date.now(),
+      staged: stage,
+      // Keep the requested game so Cancel can put it back
+      stagedReq: stage && firedReqId ? requestedGames.find(r => r.id === firedReqId) || null : null
     } : c));
     setQueue(prev => prev.filter(p => !ids.includes(p.id)));
     if (firedReqId) setRequestedGames(prev => prev.filter(r => r.id !== firedReqId));
@@ -3704,7 +4156,7 @@ renderCourts();
     const fCount = [...teamA, ...teamB].filter(p => p.gender === 'F').length;
     const matchType = matchMode === 'Open Level' ? 'Open Levels' : matchMode === 'OP Multi Group' ? 'Multi Group' : matchMode === 'OP Meet' ? 'Team Meet' : fCount === 2 ? 'Mixed Doubles' : fCount === 4 ? "Women's Doubles" : "Men's Doubles";
     const reqLabel = firedReqId ? '🎯 Requested ' : '';
-    showNotif(`Court ${open.id} — ${reqLabel}${matchType} started!`);
+    showNotif(stage ? `Court ${open.id} — ${reqLabel}${matchType} set. Press Start Game when players are ready.` : `Court ${open.id} — ${reqLabel}${matchType} started!`);
   };
 
   // ── Start a specific requested game on an open court ─────────────────
@@ -3749,6 +4201,10 @@ renderCourts();
       showNotif('Switch to Auto mode to run simulation');
       return;
     }
+    if (matchMode === 'Team Based') {
+      showNotif('Simulation is not available in Team Based mode');
+      return;
+    }
     setSimModal(false);
     setSimRunning(true);
     setSimProgress(0);
@@ -3780,7 +4236,16 @@ renderCourts();
       let filledAny = false;
       for (let ci = 0; ci < localCourts.length; ci++) {
         if (!localCourts[ci].enabled || localCourts[ci].players) continue;
-        if (localQueue.length < 4) break;
+        // Same pool rules as Auto Assign: OP Multi Group courts only take
+        // players from the group they're assigned to; other modes use the
+        // whole queue.
+        let poolQueue = localQueue;
+        if (matchMode === 'OP Multi Group') {
+          const grp = playGroups.find(g => (g.courtIds || []).includes(localCourts[ci].id));
+          if (!grp) continue;
+          poolQueue = localQueue.filter(p => p.group === grp.id);
+        }
+        if (poolQueue.length < 4) continue;
         localAssignCount += 1;
         let forceMixed = false;
         if (matchMode === 'Same Level') forceMixed = localAssignCount % 3 === 0;
@@ -3789,8 +4254,9 @@ renderCourts();
           localSbMixedCount += 1;
           forceMixed = localSbMixedCount % 3 === 0;
         }
-        const match = findMatch(localQueue.slice(0, 20), matchMode, forceMixed, null);
-        if (!match) break;
+        const match = findMatch(poolQueue, matchMode, forceMixed, null);
+        if (!match) continue;
+        roundsFiredRef.current += 1;
         const {
           teamA,
           teamB,
@@ -3811,7 +4277,7 @@ renderCourts();
       // End games on all active courts with proper pickleball scores
       let endedAny = false;
       for (let ci = 0; ci < localCourts.length; ci++) {
-        if (!localCourts[ci].players || gamesCompleted >= targetGames) continue;
+        if (!localCourts[ci].players || localCourts[ci].staged || gamesCompleted >= targetGames) continue;
         const {
           teamA,
           teamB
@@ -3839,6 +4305,9 @@ renderCourts();
           })
         });
         localQueue = [...localQueue, ...teamA.map(p => ({ ...p, queuedAt: Date.now() })), ...teamB.map(p => ({ ...p, queuedAt: Date.now() }))];
+        // Record pairings so repeat-avoidance works during the simulation,
+        // exactly like a real Submit Score does.
+        phRecord(teamA, teamB);
         // Track games played for fairness scoring
         [...teamA, ...teamB].forEach(p => {
           gamesPlayedRef.current[p.id] = (gamesPlayedRef.current[p.id] || 0) + 1;
@@ -3862,6 +4331,9 @@ renderCourts();
         setQueue(localQueue);
         setCourts(localCourts);
         setHistory(localHistory);
+        assignCount.current = localAssignCount;
+        sbMixedCount.current = localSbMixedCount;
+        olSameGenderStreak.current = localOlStreak;
         setSimRunning(false);
         showNotif('Simulation stopped at ' + gamesCompleted + ' — no valid match found.');
         return;
@@ -3892,13 +4364,16 @@ renderCourts();
       return;
     }
     const ids = manualSelected.map(p => p.id);
+    // Manual picks are also "Set Game" — started separately with Start Game.
     setCourts(prev => prev.map(c => c.id === manualCourt ? {
       ...c,
       players: {
         teamA: tA,
         teamB: tB
       },
-      startTime: Date.now()
+      startTime: null,
+      staged: true,
+      stagedReq: null
     } : c));
     setQueue(prev => prev.filter(p => !ids.includes(p.id)));
     setManualCourt(null);
@@ -3906,9 +4381,57 @@ renderCourts();
     roundsFiredRef.current += 1;
     const fCntM = [...tA, ...tB].filter(p => p.gender === 'F').length;
     const matchTypeM = matchMode === 'Open Level' ? 'Open Levels' : matchMode === 'OP Multi Group' ? 'Multi Group' : matchMode === 'OP Meet' ? 'Team Meet' : fCntM === 2 ? 'Mixed Doubles' : fCntM === 4 ? "Women's Doubles" : "Men's Doubles";
-    showNotif(`Court ${manualCourt} — ${matchTypeM} started!`);
+    showNotif(`Court ${manualCourt} — ${matchTypeM} set. Press Start Game when players are ready.`);
+  };
+  // Put players back into the waitlist at their ORIGINAL place in line:
+  // each goes just before the first waiting player who joined (or rejoined)
+  // after them, judged by their kept wait time (queuedAt).
+  const insertByWait = (list, players) => {
+    let out = [...list];
+    [...players].sort((a, b) => (a.queuedAt || 0) - (b.queuedAt || 0)).forEach(p => {
+      const t = p.queuedAt || 0;
+      const idx = out.findIndex(q => (q.queuedAt || 0) > t);
+      if (idx === -1) out.push(p);
+      else out.splice(idx, 0, p);
+    });
+    return out;
+  };
+  // ── Set Game → Start Game ─────────────────────────────────────────
+  const startStagedGame = courtId => {
+    const court = courts.find(c => c.id === courtId);
+    if (!court?.players || !court.staged) return;
+    setCourts(prev => prev.map(c => c.id === courtId ? {
+      ...c,
+      staged: false,
+      stagedReq: null,
+      startTime: Date.now()
+    } : c));
+    showNotif(`Court ${courtId} — game started!`);
+  };
+  // Cancel a set (not started) game: the 4 players go back to their original
+  // places in the waitlist (by their kept wait times), and a requested game that
+  // was used is put back in the Requested list.
+  const cancelStagedGame = courtId => {
+    const court = courts.find(c => c.id === courtId);
+    if (!court?.players || !court.staged) return;
+    const back = [...court.players.teamA, ...court.players.teamB].slice().sort((a, b) => (a.queuedAt || 0) - (b.queuedAt || 0));
+    setCourts(prev => prev.map(c => c.id === courtId ? {
+      ...c,
+      players: null,
+      startTime: null,
+      staged: false,
+      stagedReq: null
+    } : c));
+    setQueue(prev => insertByWait(prev.filter(p => !back.some(b => b.id === p.id)), back));
+    if (court.stagedReq) setRequestedGames(prev => prev.some(r => r.id === court.stagedReq.id) ? prev : [...prev, court.stagedReq]);
+    roundsFiredRef.current = Math.max(0, roundsFiredRef.current - 1);
+    showNotif(`Court ${courtId} — set game cancelled, players returned to their places in the waitlist`);
   };
   const endGame = courtId => {
+    if (courts.find(c => c.id === courtId)?.staged) {
+      showNotif('This game has not started yet — press Start Game first');
+      return;
+    }
     if (matchMode === 'Team Based') {
       endTeamGame(courtId);
       return;
@@ -4058,6 +4581,17 @@ renderCourts();
         winner
       } : m));
     }
+    // Open Play sub-mode: both teams go back to the end of the team queue.
+    if (!rrMatchId && teamSubMode === 'Open Play') {
+      const now = Date.now();
+      setTeamQueue(prev => {
+        const back = [teamA, teamB].filter(t => t && !prev.some(q => q.id === t.id)).map(t => ({
+          ...t,
+          queuedAt: now
+        }));
+        return [...prev, ...back];
+      });
+    }
     setTeamScoreModal(null);
     showNotif('Match result recorded!');
   };
@@ -4134,14 +4668,18 @@ renderCourts();
         return {
           ...c,
           players: toCourt?.players || null,
-          startTime: toCourt?.players ? toCourt.startTime : null
+          startTime: toCourt?.players ? toCourt.startTime : null,
+          staged: toCourt?.players ? !!toCourt.staged : false,
+          stagedReq: toCourt?.players ? toCourt.stagedReq || null : null
         };
       }
       if (c.id === toCourtId) {
         return {
           ...c,
           players: fromCourt.players,
-          startTime: fromCourt.startTime
+          startTime: fromCourt.startTime,
+          staged: !!fromCourt.staged,
+          stagedReq: fromCourt.stagedReq || null
         };
       }
       return c;
@@ -4168,18 +4706,19 @@ renderCourts();
         }
       };
     }));
-    // Remove replacement from queue; put removed player at front so they're next up
+    // Remove replacement from queue; the removed player goes back to their
+    // ORIGINAL place in line (by their kept wait time), not the front.
     setQueue(prev => {
       const withoutIn = prev.filter(p => p.id !== inPlayer.id);
-      const requeuedOut = outPlayer ? { ...outPlayer, queuedAt: Date.now() } : null;
-      return requeuedOut ? [requeuedOut, ...withoutIn] : withoutIn;
+      const requeuedOut = outPlayer ? { ...outPlayer, queuedAt: outPlayer.queuedAt ?? Date.now() } : null;
+      return requeuedOut ? insertByWait(withoutIn, [requeuedOut]) : withoutIn;
     });
     setReplacingPlayer(null);
     showNotif(`${inPlayer.name} subbed in for ${outPlayer?.name || 'player'}!`);
   };
 
   // Auto-remove a player from an active court and fill the slot using
-  // the same pairing-score algorithm. The removed player goes front of queue.
+  // the same pairing-score algorithm. The removed player goes back to their original place in line.
   const autoRemoveAndReplace = (courtId, outPlayerId) => {
     const court = courts.find(c => c.id === courtId);
     if (!court?.players) return;
@@ -4239,8 +4778,9 @@ renderCourts();
     }));
     setQueue(prev => {
       const withoutIn = prev.filter(p => p.id !== bestCandidate.id);
-      const requeuedOut = outPlayer ? { ...outPlayer, queuedAt: Date.now() } : null;
-      return requeuedOut ? [requeuedOut, ...withoutIn] : withoutIn;
+      // The removed player always keeps their original wait time.
+      const requeuedOut = outPlayer ? { ...outPlayer, queuedAt: outPlayer.queuedAt ?? Date.now() } : null;
+      return requeuedOut ? insertByWait(withoutIn, [requeuedOut]) : withoutIn;
     });
     setReplacingPlayer(null);
     const msg = 'Auto-filled: ' + bestCandidate.name + ' in for ' + outPlayer.name + '!';
@@ -4342,7 +4882,9 @@ renderCourts();
     setCourts(prev => prev.map(c => c.id === courtId ? {
       ...c,
       players: null,
-      startTime: null
+      startTime: null,
+      staged: false,
+      stagedReq: null
     } : c));
     setScoreModal(null);
     if (nowReadyIds.size > 0) {
@@ -4355,11 +4897,26 @@ renderCourts();
       showNotif(`Court ${courtId} — Game recorded!`);
     }
 
-    // Auto-save after every game
+    // Auto-save after every game. buildSnapshot() reads this render's state,
+    // which doesn't include the game just recorded yet — so override the
+    // fields that changed with their updated values.
+    const updatedCourtsForSave = courts.map(c => c.id === courtId ? {
+      ...c,
+      players: null,
+      startTime: null
+    } : c);
+    const updatedReqForSave = nowReadyIds.size > 0 ? requestedGames.map(r => nowReadyIds.has(r.id) ? {
+      ...r,
+      readyToFire: true
+    } : r) : requestedGames;
     setTimeout(() => {
       const snap = {
         ...buildSnapshot(),
-        name: sessionName
+        name: sessionName,
+        queue: updatedQueue,
+        history: updatedHistory,
+        requestedGames: updatedReqForSave,
+        courts: updatedCourtsForSave
       };
       const updated = savedSessions.filter(s => s.name !== snap.name).concat(snap);
       setSavedSessions(updated);
@@ -4368,6 +4925,21 @@ renderCourts();
       localStorage.setItem('dr_session_started', sessionStarted);
       setLastSaved(new Date());
     }, 0);
+  };
+  // Reuse the Player List id when a returning player is typed in by name, so
+  // the waitlist, Player List, history and pairing stats all share one id.
+  const existingListId = name => playerList.find(x => x.name.toLowerCase() === name.trim().toLowerCase())?.id || null;
+  // Insert new players into the Player List, or refresh an existing entry
+  // (matched by id or name) with the latest level/gender/group/team/partner.
+  const upsertListEntries = (prev, entries) => {
+    let next = [...prev];
+    entries.forEach(e => {
+      const { queuedAt, ...rest } = e;
+      const idx = next.findIndex(x => x.id === e.id || x.name.toLowerCase() === e.name.toLowerCase());
+      if (idx >= 0) next[idx] = { ...next[idx], ...rest };
+      else next.push(rest);
+    });
+    return next;
   };
   const addPlayer = () => {
     if (!newName.trim()) return;
@@ -4406,8 +4978,8 @@ renderCourts();
         showNotif('Partner must have a different name');
         return;
       }
-      const id1 = uid(),
-        id2 = uid();
+      const id1 = existingListId(newName) || uid(),
+        id2 = existingListId(newPartnerName) || uid();
       const p1 = {
         id: id1,
         name: newName.trim(),
@@ -4432,21 +5004,17 @@ renderCourts();
       if (joinRoundRef.current[id1] === undefined) joinRoundRef.current[id1] = roundsFiredRef.current;
       if (joinRoundRef.current[id2] === undefined) joinRoundRef.current[id2] = roundsFiredRef.current;
       setQueue(prev => [...prev, p1, p2]);
-      setPlayerList(prev => {
-        const names = new Set(prev.map(p => p.name.toLowerCase()));
-        const toAdd = [p1, p2].filter(p => !names.has(p.name.toLowerCase()));
-        return [...prev, ...toAdd];
-      });
+      setPlayerList(prev => upsertListEntries(prev, [p1, p2]));
       setNewName('');
       setNewPartnerName('');
-      if (newLevel !== newPartnerLevel && newLevel !== 'Open' && newPartnerLevel !== 'Open') {
+      if (newLevel !== newPartnerLevel) {
         showNotif(`${p1.name} & ${p2.name} added as a fixed pair! Heads up: ${newLevel} + ${newPartnerLevel} won't be matched in Same Level mode until levels match.`);
       } else {
         showNotif(`${p1.name} & ${p2.name} added as a fixed pair!`);
       }
     } else {
       const p = {
-        id: uid(),
+        id: existingListId(newName) || uid(),
         name: newName.trim(),
         level: newLevel,
         gender: newGender,
@@ -4458,10 +5026,7 @@ renderCourts();
       // Record join round for late-arrival fairness (only set once, never overwritten)
       if (joinRoundRef.current[p.id] === undefined) joinRoundRef.current[p.id] = roundsFiredRef.current;
       setQueue(prev => [...prev, p]);
-      setPlayerList(prev => {
-        if (prev.some(x => x.name.toLowerCase() === p.name.toLowerCase())) return prev;
-        return [...prev, p];
-      });
+      setPlayerList(prev => upsertListEntries(prev, [p]));
       setNewName('');
       showNotif(`${p.name} added to waitlist!`);
     }
@@ -4540,14 +5105,20 @@ renderCourts();
 
         // Build a name→id map for resolving fixed partners
         const nameToId = {};
+        // Returning players (same name already in the Player List) keep
+        // their existing id so stats and pairing history stay linked.
+        const listByName = {};
+        playerList.forEach(p => {
+          listByName[p.name.toLowerCase()] = p;
+        });
         const newPlayers = rows.map(row => {
-          const id = uid();
           const name = (row['Name'] || row['name'] || '').toString().trim();
+          const id = (name && listByName[name.toLowerCase()]?.id) || uid();
           if (name) nameToId[name.toLowerCase()] = id;
           return {
             id,
             name: name || 'Unknown',
-            level: LEVELS.includes(row['Level'] || row['level']) ? row['Level'] || row['level'] : 'Beginner',
+            level: LEVELS.includes(row['Level'] || row['level']) ? row['Level'] || row['level'] : DEFAULT_LEVEL,
             gender: (row['Gender'] || row['gender'] || '').toString().toLowerCase().startsWith('f') ? 'F' : 'M',
             _partnerName: (row['Fixed Partner'] || row['fixed partner'] || '').toString().trim().toLowerCase(),
             partnerId: null
@@ -4557,7 +5128,7 @@ renderCourts();
         // Resolve partner links by name
         newPlayers.forEach(p => {
           if (p._partnerName) {
-            const partnerId = nameToId[p._partnerName];
+            const partnerId = nameToId[p._partnerName] || listByName[p._partnerName]?.id;
             if (partnerId) p.partnerId = partnerId;
           }
           delete p._partnerName;
@@ -4569,14 +5140,24 @@ renderCourts();
           const fresh = newPlayers.filter(p => !existingNames.has(p.name.toLowerCase()));
           return [...prev, ...fresh];
         });
+        const onCourtNames = new Set(courts.flatMap(c => c.players ? [...c.players.teamA, ...c.players.teamB].map(p => (p.name || '').toLowerCase()) : []));
         setQueue(prev => {
           const existingNames = new Set(prev.map(p => p.name.toLowerCase()));
-          const fresh = newPlayers.filter(p => !existingNames.has(p.name.toLowerCase()));
+          const now = Date.now();
+          const fresh = newPlayers.filter(p => !existingNames.has(p.name.toLowerCase()) && !onCourtNames.has(p.name.toLowerCase())).map(p => ({
+            // Keep group/team etc. from an existing Player List entry
+            ...(listByName[p.name.toLowerCase()] || {}),
+            ...p,
+            queuedAt: now
+          }));
           // Record join round for each newly added player
           fresh.forEach(p => {
             if (joinRoundRef.current[p.id] === undefined) joinRoundRef.current[p.id] = roundsFiredRef.current;
           });
-          return [...prev, ...fresh];
+          const combined = [...prev, ...fresh];
+          // Drop partner links whose partner isn't in the session (waiting or on court)
+          const ids = new Set([...combined.map(p => p.id), ...courts.flatMap(c => c.players ? [...c.players.teamA, ...c.players.teamB].map(p => p.id) : [])]);
+          return combined.map(p => p.partnerId && !ids.has(p.partnerId) ? { ...p, partnerId: null } : p);
         });
         showNotif(`Imported ${newPlayers.length} players from Excel!`);
       } catch (err) {
@@ -4832,6 +5413,110 @@ renderCourts();
       } catch (e) {}
     }
   }, [history, statsGroupFilter, statsTeamFilter]);
+  // ── "Next in Waitlist" panel (Courts tab) ──────────────────────────
+  // The first 10 waiting players, shown under the court cards so staff
+  // don't have to switch to the Waitlist tab.
+  const renderNextInWaitlist = () => {
+    const NEXT_N = 10;
+    const next = queue.slice(0, NEXT_N);
+    const groupName = id => playGroups.find(g => g.id === id)?.name;
+    const teamName = id => teams.find(t => t.id === id)?.name;
+    return /*#__PURE__*/React.createElement("div", {
+      className: "card",
+      style: {
+        marginTop: 14,
+        padding: 12,
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--r)'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 10
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 800,
+        textTransform: 'uppercase',
+        letterSpacing: 1,
+        color: 'var(--text-muted)'
+      }
+    }, "⏳ Next in Waitlist"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--text-dim)'
+      }
+    }, queue.length > NEXT_N ? `showing ${NEXT_N} of ${queue.length}` : `${queue.length} waiting`), /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-ghost btn-sm",
+      style: {
+        marginLeft: 'auto'
+      },
+      onClick: () => setActiveTab('queue')
+    }, "Full waitlist →")), next.length === 0 ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--text-dim)',
+        textAlign: 'center',
+        padding: 8
+      }
+    }, "Waitlist is empty") : /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
+        gap: 6
+      }
+    }, next.map((p, i) => {
+      const partner = p.partnerId ? queue.find(x => x.id === p.partnerId) || null : null;
+      const games = playerStats[p.id]?.games || 0;
+      const tag = matchMode === 'OP Multi Group' ? groupName(p.group) : matchMode === 'OP Meet' ? teamName(p.team) : null;
+      return /*#__PURE__*/React.createElement("div", {
+        key: p.id,
+        className: "queue-item",
+        style: {
+          flexWrap: 'nowrap',
+          minWidth: 0,
+          padding: '6px 8px'
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "queue-num"
+      }, "#", i + 1), /*#__PURE__*/React.createElement(GenderTag, {
+        gender: p.gender
+      }), /*#__PURE__*/React.createElement(LevelBadge, {
+        level: p.level
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "queue-name",
+        style: {
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
+        },
+        title: p.name + (partner ? ` (fixed pair with ${partner.name})` : '')
+      }, p.name, partner ? ' 🔗' : ''), tag && /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 10,
+          fontWeight: 700,
+          color: 'var(--teal)',
+          whiteSpace: 'nowrap'
+        }
+      }, tag), /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 10,
+          color: 'var(--text-muted)',
+          marginLeft: 'auto',
+          whiteSpace: 'nowrap'
+        },
+        title: "Games played this session"
+      }, "🎮 ", games, "g"), /*#__PURE__*/React.createElement(WaitTimer, {
+        key: "nw-" + p.id,
+        since: p.queuedAt || sessionStartedMs
+      }));
+    })));
+  };
   if (!authUser) {
     return /*#__PURE__*/React.createElement(PinLoginScreen, {
       onLogin: login,
@@ -4842,9 +5527,9 @@ renderCourts();
     className: "app"
   }, notification && /*#__PURE__*/React.createElement("div", {
     className: "notification"
-  }, "✓ ", notification), /*#__PURE__*/React.createElement("div", {
+  }, "✓ ", notification), !topCollapsed && /*#__PURE__*/React.createElement("div", {
     className: "header"
-  }, /*#__PURE__*/React.createElement("h1", null, "🏓 DINK Republic Open Play"), /*#__PURE__*/React.createElement("p", null, "Court Manager · Doubles Open Play System")), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("h1", null, "🏓 DINK Republic Open Play"), /*#__PURE__*/React.createElement("p", null, "Court Manager · Doubles Open Play System")), !topCollapsed && /*#__PURE__*/React.createElement("div", {
     className: "session-bar"
   }, /*#__PURE__*/React.createElement("div", {
     className: "session-info"
@@ -4902,6 +5587,15 @@ renderCourts();
     title: "Start a fresh session"
   }, "＋ New Session"), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-sm",
+    onClick: resetGames,
+    title: "Clear games on court, History, Player Stats and Requested games, and restart everyone's wait time. Keeps the Player List and waitlist.",
+    style: {
+      background: 'var(--red-dim)',
+      color: 'var(--red)',
+      border: '1px solid var(--red)'
+    }
+  }, "🧹 Reset Games"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-sm",
     onClick: openPreviewWindow,
     title: "Open TV/display preview in a new window",
     style: {
@@ -4909,7 +5603,21 @@ renderCourts();
       color: '#fff',
       border: 'none'
     }
-  }, "📺 Preview Screen"), /*#__PURE__*/React.createElement("label", {
+  }, "📺 Preview Screen"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-sm",
+    // Tournament Desk (tournament.html, same folder) opens in its own tab so
+    // this Open Play session — and its preview screen — keep running.
+    onClick: () => {
+      const w = window.open('tournament.html', 'dr_tournament');
+      if (w) w.focus();
+    },
+    title: "Open the Tournament Desk in a new tab",
+    style: {
+      background: '#c9a40a',
+      color: '#13231f',
+      border: 'none'
+    }
+  }, "🏆 Tournament"), /*#__PURE__*/React.createElement("label", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -5023,7 +5731,7 @@ renderCourts();
       height: 13,
       cursor: 'pointer'
     }
-  }), "👁 Up Next"))), /*#__PURE__*/React.createElement("div", {
+  }), "👁 Up Next"))), !topCollapsed && /*#__PURE__*/React.createElement("div", {
     className: "stat-grid"
   }, /*#__PURE__*/React.createElement("div", {
     className: "stat-card"
@@ -5061,7 +5769,7 @@ renderCourts();
     }
   }, history.length), /*#__PURE__*/React.createElement("div", {
     className: "lbl"
-  }, "Games Done"))), /*#__PURE__*/React.createElement("div", {
+  }, "Games Done"))), !topCollapsed && /*#__PURE__*/React.createElement("div", {
     className: "controls-bar"
   }, /*#__PURE__*/React.createElement("div", {
     className: "ctrl-group"
@@ -5171,7 +5879,7 @@ renderCourts();
       transition: 'left 0.15s',
       boxShadow: '0 1px 2px rgba(0,0,0,0.3)'
     }
-  })), "Manual")), (matchMode === 'Open Level' || matchMode === 'OP Multi Group' || matchMode === 'OP Meet') && /*#__PURE__*/React.createElement("div", {
+  })), "Manual")), matchMode === 'Open Level' && /*#__PURE__*/React.createElement("div", {
     className: "ctrl-group"
   }, /*#__PURE__*/React.createElement("label", {
     style: {
@@ -5181,21 +5889,45 @@ renderCourts();
       cursor: 'pointer',
       fontSize: 11,
       fontWeight: 600,
-      color: forceMixedEnabled ? 'var(--text-muted)' : 'var(--orange)',
+      color: strictLevel ? 'var(--orange)' : 'var(--text-muted)',
       whiteSpace: 'nowrap'
     },
-    title: forceMixedEnabled ? "Forces a mixed-doubles round after 2 same-gender rounds in a row. Uncheck to never force mixed." : "Gender rotation is off — mixed rounds will only happen if they naturally score best."
+    title: strictLevel ? "On: prefers matches where all 4 players are within one level of each other (e.g. keeps Beginners and Intermediates apart), among the players near the front of the line. Average wait is unchanged, but a player with a less common level may occasionally wait one extra round." : "Off: levels are balanced by team average only, so a Beginner and an Intermediate can share a court. Waits are most even this way."
   }, /*#__PURE__*/React.createElement("input", {
     type: "checkbox",
-    checked: forceMixedEnabled,
-    onChange: e => setForceMixedEnabled(e.target.checked),
+    checked: strictLevel,
+    onChange: e => toggleStrictLevel(e.target.checked),
     style: {
       accentColor: 'var(--orange)',
       width: 13,
       height: 13,
       cursor: 'pointer'
     }
-  }), forceMixedEnabled ? "🔀 Forced Mixed Rotation" : "🔀 Mixed Rotation Off")), /*#__PURE__*/React.createElement("div", {
+  }), "🎚 Stricter Level")), matchMode === 'Open Level' && /*#__PURE__*/React.createElement("div", {
+    className: "ctrl-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 5,
+      cursor: 'pointer',
+      fontSize: 11,
+      fontWeight: 600,
+      color: avoid3W1M ? 'var(--orange)' : 'var(--text-muted)',
+      whiteSpace: 'nowrap'
+    },
+    title: avoid3W1M ? "On: avoids games with 3 women + 1 man by choosing other games from the players near the front of the line. As softer preferences: when women and men are roughly balanced (40–60% women waiting), men's and women's doubles are preferred over mixed; also avoids 1 woman + 3 men when it costs nothing else. If there's no other option, the game still goes ahead. Average wait is unchanged; a player may occasionally wait one extra round." : "Off: any mix of women and men is allowed whenever it comes up."
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: avoid3W1M,
+    onChange: e => toggleAvoid3W1M(e.target.checked),
+    style: {
+      accentColor: 'var(--orange)',
+      width: 13,
+      height: 13,
+      cursor: 'pointer'
+    }
+  }), "⚖ Stricter Gender")), (matchMode === 'Same Level' || matchMode === 'Skill Based') && /*#__PURE__*/React.createElement("div", {
     className: "ctrl-group"
   }, /*#__PURE__*/React.createElement("label", {
     style: {
@@ -5208,7 +5940,7 @@ renderCourts();
       color: prioritizeFreshness ? 'var(--orange)' : 'var(--text-muted)',
       whiteSpace: 'nowrap'
     },
-    title: prioritizeFreshness ? "Freshness (new partner/opponent combos) is checked BEFORE wait time in every mode. Someone who's waited longest may occasionally be skipped in favor of a fresher match." : "Wait time is protected first in every mode — freshness only breaks ties between otherwise-equal matches."
+    title: prioritizeFreshness ? "Freshness (new partner/opponent combos) is checked BEFORE wait time. Someone who's waited longest may occasionally be skipped in favor of a fresher match." : "Wait time is protected first — freshness only breaks ties between otherwise-equal matches."
   }, /*#__PURE__*/React.createElement("input", {
     type: "checkbox",
     checked: prioritizeFreshness,
@@ -5224,7 +5956,7 @@ renderCourts();
     style: {
       marginLeft: 'auto'
     },
-    onClick: autoAssign
+    onClick: () => autoAssign()
   }, "▶ Auto Assign"), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-sm",
     style: {
@@ -5236,7 +5968,63 @@ renderCourts();
       setSimModal(true);
     },
     title: "Run automated game simulation"
-  }, "🧪 Test Sim")), /*#__PURE__*/React.createElement("div", {
+  }, "🧪 Test Sim")), topCollapsed ? /*#__PURE__*/React.createElement("div", {
+    // Collapsed: one slim bar with the session name and key numbers
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      gap: 14,
+      background: 'var(--surface)',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--r)',
+      padding: '8px 14px',
+      marginBottom: 12,
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 800,
+      color: 'var(--green)'
+    }
+  }, "🏓 ", sessionName), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--gold)'
+    }
+  }, queue.length), " in queue"), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--green)'
+    }
+  }, onCourtCount), " on court"), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--blue)'
+    }
+  }, openCourts), " open courts"), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: 'var(--teal)'
+    }
+  }, history.length), " games done"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text-muted)'
+    }
+  }, matchMode), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    style: {
+      marginLeft: 'auto'
+    },
+    onClick: toggleTop,
+    title: "Show the title, session bar, stats and controls"
+  }, "▼ Show controls")) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'flex-end',
+      margin: '-4px 0 6px'
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: toggleTop,
+    title: "Hide the title, session bar, stats and controls to make room for the courts"
+  }, "▲ Hide controls")), /*#__PURE__*/React.createElement("div", {
     className: "tabbar"
   }, [['courts', `Courts (${numCourts})`], ...(matchMode === 'Team Based' ? [['teamroster', `Teams (${teamRoster.length})`]] : [['queue', `Waitlist (${queue.length})`], ['playerlist', `Player List (${playerList.length})`], ['requests', `Requested (${requestedGames.length})`]]), ['history', `History (${history.length})`], ['stats', 'Player Stats'], ...(matchMode === 'OP Multi Group' ? [['grouplist', `Group List (${playGroups.length})`]] : []), ...(matchMode === 'OP Meet' ? [['teamlist', `Team List (${teams.length})`]] : []), ...(authUser.role === 'Superadmin' ? [['users', `Users (${users.length})`]] : [])].map(([key, label]) => /*#__PURE__*/React.createElement("div", {
     key: key,
@@ -5252,7 +6040,7 @@ renderCourts();
   }, /*#__PURE__*/React.createElement("span", {
     className: "court-name"
   }, /*#__PURE__*/React.createElement("span", {
-    className: `court-status-dot ${court.players ? 'dot-green' : 'dot-gray'}`
+    className: `court-status-dot ${court.players && !court.staged ? 'dot-green' : 'dot-gray'}`
   }), "Court ", court.id, matchMode === 'OP Multi Group' && (() => {
     const owner = playGroups.find(s => (s.courtIds || []).includes(court.id));
     return owner ? /*#__PURE__*/React.createElement("span", {
@@ -5277,7 +6065,21 @@ renderCourts();
       alignItems: 'flex-end',
       gap: 2
     }
-  }, /*#__PURE__*/React.createElement(CourtTimer, {
+  }, court.staged ? /*#__PURE__*/React.createElement("span", {
+    title: "Game is set but not started — not shown on the preview screen yet",
+    style: {
+      fontSize: 10,
+      fontWeight: 800,
+      color: 'var(--gold)',
+      background: 'var(--gold-dim)',
+      border: '1px solid var(--gold)',
+      borderRadius: 10,
+      padding: '2px 8px',
+      letterSpacing: .5,
+      textTransform: 'uppercase',
+      whiteSpace: 'nowrap'
+    }
+  }, "⏸ Set · not started") : /*#__PURE__*/React.createElement(CourtTimer, {
     startTime: court.startTime,
     limitMin: gameTime
   }), (() => {
@@ -5453,9 +6255,21 @@ renderCourts();
       gender: p.gender
     }), /*#__PURE__*/React.createElement(LevelBadge, {
       level: p.level
-    }), /*#__PURE__*/React.createElement("span", {
+    }), /*#__PURE__*/React.createElement("div", {
+      // Name + 🔗 + ⚔️ badges: badges wrap onto a second line when the card
+      // is narrow, so the player's name is never cut off.
+      style: {
+        flex: 1,
+        minWidth: 0,
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: 4
+      }
+    }, /*#__PURE__*/React.createElement("span", {
       className: "player-name",
       style: {
+        flex: '0 1 auto',
         color: isBeingReplaced ? 'var(--red)' : undefined
       }
     }, p.name), p.partnerId && section.players.find(x => x.id === p.partnerId) && /*#__PURE__*/React.createElement("span", {
@@ -5463,7 +6277,7 @@ renderCourts();
         fontSize: 9,
         color: '#ce93d8'
       }
-    }, "🔗"), isRearranging && /*#__PURE__*/React.createElement("span", {
+    }, "🔗"), section.team === 'A' && opponentBadges(p, court.players.teamB)), isRearranging && /*#__PURE__*/React.createElement("span", {
       style: {
         marginLeft: 'auto',
         fontSize: 12,
@@ -5687,7 +6501,28 @@ renderCourts();
       setReplacingPlayer(null);
     },
     title: "Rearrange players by dragging"
-  }, "⇅ Rearrange"), /*#__PURE__*/React.createElement("button", {
+  }, "⇅ Rearrange"), court.staged ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-green btn-sm",
+    style: {
+      flex: 1
+    },
+    title: "Start this game: the timer begins and it appears on the preview screen",
+    onClick: () => {
+      setRearrangeCourt(null);
+      setReplacingPlayer(null);
+      setCrossCourtSwap(null);
+      startStagedGame(court.id);
+    }
+  }, "▶ Start Game"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    title: "Cancel this set game — the 4 players go back to their original places in the waitlist, with their wait times kept",
+    onClick: () => {
+      setRearrangeCourt(null);
+      setReplacingPlayer(null);
+      setCrossCourtSwap(null);
+      cancelStagedGame(court.id);
+    }
+  }, "✕ Cancel")) : /*#__PURE__*/React.createElement("button", {
     className: "btn btn-red btn-sm",
     style: {
       flex: 1
@@ -5807,7 +6642,7 @@ renderCourts();
       flex: 1
     },
     onClick: confirmManual
-  }, "Start Game"), /*#__PURE__*/React.createElement("button", {
+  }, "Set Game"), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-ghost btn-sm",
     onClick: () => {
       setManualCourt(null);
@@ -5826,8 +6661,9 @@ renderCourts();
       width: '100%',
       marginTop: 8
     },
-    onClick: () => autoAssign(court.id)
-  }, "▶ Start Game"), queue.length < 4 && /*#__PURE__*/React.createElement("div", {
+    onClick: () => autoAssign(court.id, { stage: true }),
+    title: "Pick the next game for this court. It isn't started (and isn't shown on the preview screen) until you press Start Game, so you can still swap players without resetting anyone's wait time."
+  }, "▶ Set Game"), queue.length < 4 && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: 'var(--text-dim)',
@@ -5961,45 +6797,10 @@ renderCourts();
       },
       onClick: () => autoAssign(court.id)
     }, "▶ Start Match"))))));
-  })(), showUpNext && activeTab === 'courts' && queue.length >= 4 && matchMode !== 'Manual' && (() => {
-    // Simulate the next 2 auto-assign picks without touching real state.
-    // Must mirror autoAssign exactly: same forceMixed counter logic and
-    // same priorityIds (readyToFire requested game) check.
-    const previewMatches = [];
-    // Cap preview queue to first 20 players — avoids O(n⁴) hang with large rosters.
-    // The actual autoAssign uses the full queue, so this only affects the preview display.
-    let simQueue = queue.slice(0, 20);
-    let simAssignCount = assignCount.current;
-    let simSbMixedCount = sbMixedCount.current;
-    for (let n = 0; n < 2; n++) {
-      if (simQueue.length < 4) break;
-      simAssignCount += 1;
-      let forceMixed = false;
-      if (matchMode === 'Skill Based' || matchMode === 'Same Level') {
-        forceMixed = simAssignCount % 3 === 0;
-      }
-      if (matchMode === 'Skill Based') {
-        simSbMixedCount += 1;
-        forceMixed = simSbMixedCount % 3 === 0;
-      }
-      // Check for a readyToFire requested game at the front of the simulated queue
-      let simPriorityIds = null;
-      for (const req of requestedGames) {
-        if (!req.readyToFire) continue;
-        const positions = req.playerIds.map(id => simQueue.findIndex(p => p.id === id));
-        if (positions.some(pos => pos === -1)) continue;
-        const maxPos = Math.max(...positions);
-        const othersAhead = simQueue.slice(0, maxPos).filter(p => !req.playerIds.includes(p.id)).length;
-        if (othersAhead === 0) {
-          simPriorityIds = req.playerIds;
-          break;
-        }
-      }
-      const m = findMatch(simQueue, matchMode, forceMixed, simPriorityIds);
-      if (!m) break;
-      previewMatches.push(m);
-      simQueue = simQueue.filter(p => !m.ids.includes(p.id));
-    }
+  })(), activeTab === 'courts' && matchMode !== 'Team Based' && renderNextInWaitlist(), showUpNext && activeTab === 'courts' && queue.length >= 4 && matchMode !== 'Manual' && (() => {
+    // Same logic as the pop-out preview window (computeUpNext) so both
+    // always show the same upcoming matches.
+    const previewMatches = upNextMatches;
     if (!previewMatches.length) return null;
     return /*#__PURE__*/React.createElement("div", {
       style: {
@@ -6109,8 +6910,8 @@ renderCourts();
           style: {
             color: 'var(--text-muted)'
           }
-        }, p.name), partnerRep > 0 ? /*#__PURE__*/React.createElement("span", {
-          title: `Played together ${partnerRep}× before`,
+        }, p.name), section.players === m.teamA && opponentBadges(p, m.teamB), partnerRep > 0 ? /*#__PURE__*/React.createElement("span", {
+          title: `Partnered together ${partnerRep}× before`,
           style: {
             fontSize: 9,
             color: 'var(--orange)',
@@ -6420,7 +7221,7 @@ renderCourts();
           cursor: 'pointer'
         },
         onClick: () => unlinkPartner(p.id)
-      }, "🔗 ", partner.name, " ✕"), partner && p.level !== partner.level && p.level !== 'Open' && partner.level !== 'Open' && /*#__PURE__*/React.createElement("span", {
+      }, "🔗 ", partner.name, " ✕"), partner && p.level !== partner.level && /*#__PURE__*/React.createElement("span", {
         title: `${p.level} + ${partner.level} — this pair won't be matched in Same Level mode until their levels match or you switch modes`,
         style: {
           fontSize: 13,
@@ -6698,10 +7499,6 @@ renderCourts();
     }
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("strong", {
     style: {
-      color: '#aaffaa'
-    }
-  }, "Open"), " — All welcome, used in Open Level mode"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("strong", {
-    style: {
       color: 'var(--green)'
     }
   }, "Beginner"), " — Just learning"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("strong", {
@@ -6790,7 +7587,9 @@ renderCourts();
     const players = req.playerIds.map(id => {
       const p = allSessionPlayers.find(x => x.id === id);
       const onCourt = p && courts.some(c => c.players && [...c.players.teamA, ...c.players.teamB].find(x => x.id === id));
-      const baseline = req.baselineCounts?.[id] ?? 0;
+      // Older requests (saved before baselineCounts existed) fall back to the
+      // player's count at render time so they don't all show as rounded up.
+      const baseline = req.baselineCounts?.[id] ?? (playerStats[id]?.games || 0);
       const currentGames = playerStats[id]?.games || 0;
       const roundedUp = currentGames > baseline;
       return p ? {
@@ -7240,7 +8039,7 @@ renderCourts();
     },
     autoFocus: true,
     onKeyDown: e => {
-      if (e.key === 'Enter' && !matchMode === 'Manual' && queue.length >= 4) runSimulation(Math.max(1, Math.min(500, parseInt(simGames) || 1)));
+      if (e.key === 'Enter' && matchMode !== 'Manual' && queue.length >= 4) runSimulation(Math.max(1, Math.min(500, parseInt(simGames) || 1)));
     }
   }), /*#__PURE__*/React.createElement("div", {
     style: {
