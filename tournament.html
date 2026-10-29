@@ -190,6 +190,8 @@ a.btn{text-decoration:none;color:inherit}
 .cs-nl i{display:block;font-style:normal;font-size:.72em;color:#A9C4DD;text-transform:uppercase;letter-spacing:.06em}
 .csbox{position:relative;width:100%;max-width:1300px;border-radius:12px;overflow:auto;max-height:100%;box-shadow:0 24px 80px rgba(0,0,0,.5)}
 .csbox .st-tools{top:auto;bottom:12px}
+.hd{text-decoration:underline dotted;text-underline-offset:3px;cursor:help;border-radius:2px}
+.hd:focus-visible{outline:2px solid var(--court);outline-offset:2px}
 .tbb{display:inline-block;margin-left:6px;font-size:10px;font-weight:700;letter-spacing:.04em;padding:1px 5px;border-radius:3px;background:var(--court-soft);color:var(--court);vertical-align:1px;white-space:nowrap}
 .tbb.open{background:var(--warn-soft);color:var(--warn)}
 .rktie{margin-top:8px;padding:8px 10px;border-radius:var(--r);background:var(--warn-soft);border:1px solid var(--warn);font-size:13px}
@@ -782,7 +784,9 @@ function rankEditor(grp,key){const d=ui.rkDraft||[],seeded=key[0]==='b'&&grp.mat
     <div class="row" style="gap:8px;margin-top:10px"><button class="btn sm primary" data-act="rksave" data-k="${key}">Save order</button><button class="btn sm ghost" data-act="rkcancel">Cancel</button></div></div>`}
 function table(list,opt={}){const adv=opt.adv||0;
   const gp=s=>opt.of?`${s.p}/${typeof opt.of==='function'?opt.of(s):opt.of}`:s.p;
-  const h=`<tr><th>#</th><th>Pair</th><th title="Games played${opt.of?' of games scheduled':''}">GP</th><th>W</th><th>L</th>${opt.kc?'<th title="Wins on the top court">Top ct</th><th>Pts</th>':''}<th>PF</th><th>PA</th><th>+/−</th>${opt.buch?'<th title="Buchholz: total wins of opponents faced">Buch</th>':''}</tr>`;
+  /* Column headers with a definition on hover (and on keyboard focus) */
+  const th=(lab,def)=>`<th><abbr class="hd" title="${esc(def)}" tabindex="0">${lab}</abbr></th>`;
+  const h=`<tr>${th('#',list.ov?'Rank in this table, as set by the desk.':'Rank in this table: wins first, then the tiebreakers (head-to-head, +/−, fewest points allowed).')}${th('Pair','The team of two players.')}${th('GP',opt.of?'Games played, out of the games each pair is scheduled to play.':'Games played so far.')}${th('W','Wins.')}${th('L','Losses.')}${opt.kc?th('Top ct','Wins on the top court. Each one is worth a bonus point.')+th('Pts','Standings points: 1 per win, plus 1 more for each win on the top court.'):''}${th('PF','Points for: total points this pair has scored.')}${th('PA','Points against: total points scored against this pair. Fewer is better; it is the 3rd tiebreaker.')}${th('+/−','Point difference: points for minus points against. It is the 2nd tiebreaker, after head-to-head.')}${opt.buch?th('Buch','Buchholz: total wins of the opponents this pair has played. Higher means a tougher schedule; it breaks ties in Swiss.'):''}</tr>`;
   const rows=list.map((s,i)=>`<tr class="${i<adv?'adv':''}"><td class="rk">${i+1}</td><td>${esc(nm(s.id))}${s.tb?`<span class="tbb" title="${TB_TITLE[s.tb]}">${TB_LABEL[s.tb]}</span>`:''}${s.tieOpen&&opt.complete?'<span class="tbb open" title="Still tied after all tiebreakers">Tied</span>':''}</td><td class="gp">${gp(s)}</td><td>${s.w}</td><td>${s.l}</td>${opt.kc?`<td>${s.kc}</td><td><b>${s.pts}</b></td>`:''}<td>${s.pf}</td><td>${s.pa}</td><td class="${s.diff>0?'pos':s.diff<0?'neg':''}">${s.diff>0?'+':''}${s.diff}</td>${opt.buch?`<td>${s.buch}</td>`:''}</tr>`).join('');
   return`<div class="tw"><table>${h}${rows}</table></div>`}
 function rounds(grp,ms,R,sits){const by={};ms.forEach(m=>(by[m.round]=by[m.round]||[]).push(m));
