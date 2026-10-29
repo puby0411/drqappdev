@@ -89,7 +89,7 @@ a.btn{text-decoration:none;color:inherit}
 .pod:not(.set) .pb{opacity:.55}
 @media (max-width:480px){.podbox .pname{font-size:16px}.podbox .p1 .pname{font-size:20px}.podbox .pb b{font-size:32px}.podbox .p1 .pb{height:120px}.podbox .p2 .pb{height:88px}.podbox .p3 .pb{height:64px}.podbox .pn svg{width:38px;height:38px}.podhead h3{font-size:22px}.pname{font-size:15px}.p1 .pname{font-size:18px}.pb b{font-size:28px}.p1 .pb{height:96px}.p2 .pb{height:70px}.p3 .pb{height:52px}.pb span{font-size:9.5px;letter-spacing:.06em}}
 .podtog{font-size:13px;padding:6px 10px;border:1px solid var(--line);border-radius:var(--r);background:var(--surface)}
-/* Winners stage: one committed night-court look in both themes */
+/* Winners stage: night court in dark mode, daylight court in light mode (light rules at the end of this block) */
 .podbox.stagebox{padding:0;max-width:1200px;background:#081512;box-shadow:0 24px 80px rgba(0,0,0,.5);overflow:hidden;border-radius:12px;position:relative}
 .stage{position:relative;overflow:hidden;isolation:isolate;color:#F4F1E6;box-sizing:border-box;background:radial-gradient(120% 85% at 50% -12%,#2f7a62 0%,#14463a 32%,#0a1b17 70%,#060f0d 100%);display:flex;flex-direction:column;align-items:center;justify-content:space-between;gap:12px;padding:clamp(14px,min(3.4vw,5vh),44px) clamp(8px,3vw,48px) 0;min-height:min(80vh,700px)}
 .stage.big{min-height:100vh;min-height:100dvh}
@@ -163,7 +163,7 @@ a.btn{text-decoration:none;color:inherit}
 .mctime{font-family:var(--display);font-size:14px;font-weight:700;color:var(--court);font-variant-numeric:tabular-nums}
 .ctdone{color:var(--muted);text-transform:none;letter-spacing:0;font-weight:600}
 .match.oncourt{border-color:var(--court);box-shadow:inset 3px 0 0 var(--court)}
-/* Courts screen (TV): one committed night look, like the winners stage */
+/* Courts screen (TV): night look in dark mode, daylight look in light mode */
 .cs{min-height:100vh;min-height:100dvh;box-sizing:border-box;background:radial-gradient(120% 80% at 50% -10%,#1d4f7a 0%,#0d2a44 45%,#06131f 100%);color:#F2F6FA;padding:clamp(14px,2.5vw,36px);display:flex;flex-direction:column;gap:clamp(12px,2vh,24px);font-family:var(--body)}
 .csbox .cs{min-height:min(84vh,760px);padding-bottom:64px}
 .cs-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap}
@@ -190,7 +190,9 @@ a.btn{text-decoration:none;color:inherit}
 .cs-nl i{display:block;font-style:normal;font-size:.72em;color:#A9C4DD;text-transform:uppercase;letter-spacing:.06em}
 .csbox{position:relative;width:100%;max-width:1300px;border-radius:12px;overflow:auto;max-height:100%;box-shadow:0 24px 80px rgba(0,0,0,.5)}
 .csbox .st-tools{top:auto;bottom:12px}
-.hd{text-decoration:underline dotted;text-underline-offset:3px;cursor:help;border-radius:2px}
+.hd{text-decoration:underline dotted;text-underline-offset:3px;cursor:default;border-radius:2px}
+.tbb{cursor:default}
+.tip{position:fixed;z-index:70;max-width:min(280px,calc(100vw - 16px));background:var(--ink);color:var(--bg);font:500 12.5px/1.45 var(--body);letter-spacing:0;text-transform:none;text-align:left;padding:7px 10px;border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,.25);pointer-events:none}
 .hd:focus-visible{outline:2px solid var(--court);outline-offset:2px}
 .tbb{display:inline-block;margin-left:6px;font-size:10px;font-weight:700;letter-spacing:.04em;padding:1px 5px;border-radius:3px;background:var(--court-soft);color:var(--court);vertical-align:1px;white-space:nowrap}
 .tbb.open{background:var(--warn-soft);color:var(--warn)}
@@ -202,6 +204,34 @@ a.btn{text-decoration:none;color:inherit}
 .rkl li{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:4px 6px 4px 10px;min-width:0}
 .rkl .rkn{font-family:var(--display);font-weight:700;font-size:17px;width:22px;font-variant-numeric:tabular-nums}
 .rkl .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.themeseg button{font-size:15px;padding:7px 12px}
+/* Winners stage, light mode */
+:root[data-theme="light"] .podbox.stagebox{background:#EAF3EF}
+:root[data-theme="light"] .stage{color:#13231F;background:radial-gradient(120% 85% at 50% -12%,#FFFFFF 0%,#EEF6F2 38%,#D7E7E0 100%)}
+:root[data-theme="light"] .st-lights{background:conic-gradient(from 195deg at 50% 0%,transparent 0 6deg,rgba(201,164,10,.16) 9deg 17deg,transparent 21deg 33deg,rgba(201,164,10,.12) 36deg 44deg,transparent 48deg 360deg)}
+:root[data-theme="light"] .st-court{opacity:.32}
+:root[data-theme="light"] .st-ev,:root[data-theme="light"] .st-msg{color:#4C5F57}
+:root[data-theme="light"] .st-br{color:#13231F}
+:root[data-theme="light"] .st-title{background:linear-gradient(90deg,#7A580C,#B8901A 25%,#9C7412 45%,#D9AE2E 55%,#7A580C 75%,#B8901A);background-size:220% auto;-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 2px 6px rgba(160,120,10,.18))}
+:root[data-theme="light"] .st-name{color:#13231F;text-shadow:none}
+:root[data-theme="light"] .s1 .st-name{color:#7A580C}
+:root[data-theme="light"] .st-name em,:root[data-theme="light"] .st-name i{color:#56675F}
+:root[data-theme="light"] .st-cup{filter:drop-shadow(0 8px 18px rgba(160,120,10,.3))}
+:root[data-theme="light"] .st-col:not(.set) .st-block{filter:saturate(.45);opacity:.7}
+:root[data-theme="light"] .st-btn{color:#13231F;background:rgba(255,255,255,.8);border-color:rgba(19,35,31,.25)}
+:root[data-theme="light"] .st-btn:hover{background:#fff;border-color:rgba(19,35,31,.55)}
+:root[data-theme="light"] .st-warn{background:rgba(255,255,255,.96);color:#13231F;border-color:#C9A40A}
+@media (max-width:600px){:root[data-theme="light"] .st-tools{background:#EAF3EF}}
+/* Courts screen, light mode */
+:root[data-theme="light"] .cs{color:#10233A;background:radial-gradient(120% 80% at 50% -10%,#FFFFFF 0%,#EAF1F8 50%,#D6E2EE 100%)}
+:root[data-theme="light"] .cs-head h1,:root[data-theme="light"] .cs-team b{color:#10233A}
+:root[data-theme="light"] .cs-ev,:root[data-theme="light"] .cs-meta,:root[data-theme="light"] .cs-vs,:root[data-theme="light"] .cs-nl i,:root[data-theme="light"] .cs-empty{color:#4E6378}
+:root[data-theme="light"] .cs-clock,:root[data-theme="light"] .cs-timer,:root[data-theme="light"] .cs-next>b{color:#8F6200}
+:root[data-theme="light"] .cs-tile{background:rgba(255,255,255,.72);border-color:#C3D2E2}
+:root[data-theme="light"] .cs-tile.on{background:linear-gradient(180deg,#FFFFFF,#E7F0FA);border-color:#2B5BA8}
+:root[data-theme="light"] .cs-free{color:#1B6B55}
+:root[data-theme="light"] .cs-next{border-top-color:rgba(16,35,58,.16)}
+:root[data-theme="light"] .cs-nl span{background:rgba(16,35,58,.07)}
 .savebox{display:flex;align-items:center;gap:10px;min-height:34px}
 .sstat{font-size:12.5px;color:var(--muted);max-width:240px;line-height:1.3}
 .sstat.ok{color:var(--accent)}
@@ -380,6 +410,7 @@ td.gp{color:var(--muted)}
 
 <script>
 (function(){
+try{let v=null;try{v=localStorage.getItem('dr_light_mode')}catch(e){}document.documentElement.dataset.theme=v==='1'?'light':'dark'}catch(e){}
 if(window.__drNoAuth)return;
 /* ---------- naming guide (code names match the words on screen) ----------
    group     = one division of the event: "Group 1", "+ Add group". State: S.groups[]; the current one is `grp` (cur()).
@@ -785,9 +816,9 @@ function rankEditor(grp,key){const d=ui.rkDraft||[],seeded=key[0]==='b'&&grp.mat
 function table(list,opt={}){const adv=opt.adv||0;
   const gp=s=>opt.of?`${s.p}/${typeof opt.of==='function'?opt.of(s):opt.of}`:s.p;
   /* Column headers with a definition on hover (and on keyboard focus) */
-  const th=(lab,def)=>`<th><abbr class="hd" title="${esc(def)}" tabindex="0">${lab}</abbr></th>`;
+  const th=(lab,def)=>`<th><abbr class="hd" data-tip="${esc(def)}" aria-label="${lab}: ${esc(def)}" tabindex="0">${lab}</abbr></th>`;
   const h=`<tr>${th('#',list.ov?'Rank in this table, as set by the desk.':'Rank in this table: wins first, then the tiebreakers (head-to-head, +/−, fewest points allowed).')}${th('Pair','The team of two players.')}${th('GP',opt.of?'Games played, out of the games each pair is scheduled to play.':'Games played so far.')}${th('W','Wins.')}${th('L','Losses.')}${opt.kc?th('Top ct','Wins on the top court. Each one is worth a bonus point.')+th('Pts','Standings points: 1 per win, plus 1 more for each win on the top court.'):''}${th('PF','Points for: total points this pair has scored.')}${th('PA','Points against: total points scored against this pair. Fewer is better; it is the 3rd tiebreaker.')}${th('+/−','Point difference: points for minus points against. It is the 2nd tiebreaker, after head-to-head.')}${opt.buch?th('Buch','Buchholz: total wins of the opponents this pair has played. Higher means a tougher schedule; it breaks ties in Swiss.'):''}</tr>`;
-  const rows=list.map((s,i)=>`<tr class="${i<adv?'adv':''}"><td class="rk">${i+1}</td><td>${esc(nm(s.id))}${s.tb?`<span class="tbb" title="${TB_TITLE[s.tb]}">${TB_LABEL[s.tb]}</span>`:''}${s.tieOpen&&opt.complete?'<span class="tbb open" title="Still tied after all tiebreakers">Tied</span>':''}</td><td class="gp">${gp(s)}</td><td>${s.w}</td><td>${s.l}</td>${opt.kc?`<td>${s.kc}</td><td><b>${s.pts}</b></td>`:''}<td>${s.pf}</td><td>${s.pa}</td><td class="${s.diff>0?'pos':s.diff<0?'neg':''}">${s.diff>0?'+':''}${s.diff}</td>${opt.buch?`<td>${s.buch}</td>`:''}</tr>`).join('');
+  const rows=list.map((s,i)=>`<tr class="${i<adv?'adv':''}"><td class="rk">${i+1}</td><td>${esc(nm(s.id))}${s.tb?`<span class="tbb" data-tip="${TB_TITLE[s.tb]}" tabindex="0">${TB_LABEL[s.tb]}</span>`:''}${s.tieOpen&&opt.complete?'<span class="tbb open" data-tip="Still tied after all tiebreakers. Settle it with Edit order." tabindex="0">Tied</span>':''}</td><td class="gp">${gp(s)}</td><td>${s.w}</td><td>${s.l}</td>${opt.kc?`<td>${s.kc}</td><td><b>${s.pts}</b></td>`:''}<td>${s.pf}</td><td>${s.pa}</td><td class="${s.diff>0?'pos':s.diff<0?'neg':''}">${s.diff>0?'+':''}${s.diff}</td>${opt.buch?`<td>${s.buch}</td>`:''}</tr>`).join('');
   return`<div class="tw"><table>${h}${rows}</table></div>`}
 function rounds(grp,ms,R,sits){const by={};ms.forEach(m=>(by[m.round]=by[m.round]||[]).push(m));
   return Object.keys(by).map(Number).sort((a,b)=>a-b).map(r=>{const list=by[r],done=list.every(m=>R[m.id].done);const sit=sits&&sits[r-1];
@@ -804,6 +835,7 @@ function vTop(){const n=S.groups.length;
   return`<header class="top"><a class="btn ghost navback" href="index.html" data-nav="openplay" title="Back to Open Play">← Open Play</a><div class="brand">${BALL}<div style="min-width:0;flex:1"><div class="eyebrow">Tournament</div><input type="text" class="evname" id="ev_name" data-act="evname" value="${esc(S.name)}" aria-label="Tournament name"></div></div>
   <div class="topctl"><div class="field"><label for="ev_date">Date</label><input type="date" id="ev_date" data-act="evdate" value="${esc(S.date||'')}"></div>
   <div class="field"><span class="lbl">Groups</span><div class="step"><button data-act="grpminus" ${n<=1?'disabled':''} aria-label="Remove last group">−</button><input id="ev_count" data-act="grpcount" inputmode="numeric" value="${n}" aria-label="Number of groups"><button data-act="grpplus" ${n>=12?'disabled':''} aria-label="Add group">+</button></div></div>
+  <div class="field"><span class="lbl">Display</span><div class="seg themeseg" role="group" aria-label="Light or dark mode">${[['light','Light'],['dark','Dark']].map(([k,v])=>`<button data-act="theme" data-v="${k}" class="${THEME===k?'on':''}" aria-pressed="${THEME===k}">${v}</button>`).join('')}</div></div>
   <div class="field"><span class="lbl">&nbsp;</span><button class="btn ghost" data-act="backup">Backup / restore</button></div>
   <div class="field"><span class="lbl">Results</span><div class="savebox" id="savebox">${statusHTML()}</div></div></div></header>
   ${ui.pending==='rmlast'?`<div class="banner" style="background:var(--warn-soft);border-color:var(--warn)"><span>“${esc(S.groups[n-1].name)}” already has matches. Remove it and its results?</span><span class="row" style="gap:8px"><button class="btn armed" data-act="rmlastyes">Remove group</button><button class="btn" data-act="cancel">Keep it</button></span></div>`:''}
@@ -949,7 +981,7 @@ function afterStage(){stageFX(FX,ui.stage)}
 /* ---------- podium window: a real separate browser window, drawn and kept live from this page ---------- */
 const PW={w:null,grp:null,html:'',F:null};
 function podiumDoc(){const css=[...document.querySelectorAll('style')].map(s=>s.outerHTML).join('');
-  return`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Winners podium</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Public+Sans:wght@400;500;600;700&display=swap">${css}<style>html,body{margin:0;padding:0;background:#060f0d;min-height:100%}</style></head><body><div id="stageroot"></div><div class="st-bar"><button class="st-btn" id="fsb">Full screen</button></div></body></html>`}
+  return`<!doctype html><html data-theme="${THEME}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Winners podium</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Public+Sans:wght@400;500;600;700&display=swap">${css}<style>html,body{margin:0;padding:0;background:#060f0d;min-height:100%}html[data-theme=light],html[data-theme=light] body{background:#EAF3EF}</style></head><body><div id="stageroot"></div><div class="st-bar"><button class="st-btn" id="fsb">Full screen</button></div></body></html>`}
 function openPodiumWindow(brId){let w=null;try{w=window.open('','drPodium','popup=yes,width=1280,height=760')}catch(e){w=null}if(!w)return false;
   try{const d=w.document;if(!d.getElementById('stageroot')){d.open();d.write(podiumDoc());d.close()}
     const fb=d.getElementById('fsb');if(fb&&!fb.dataset.wired){fb.dataset.wired='1';fb.addEventListener('click',()=>{try{const p=d.fullscreenElement?d.exitFullscreen():d.documentElement.requestFullscreen();if(p&&p.catch)p.catch(()=>{})}catch(e){}})}
@@ -957,7 +989,7 @@ function openPodiumWindow(brId){let w=null;try{w=window.open('','drPodium','popu
   if(!PW.F||PW.F.win!==w)PW.F=makeFX(w);PW.w=w;PW.grp=brId;PW.html='';PW.F.last=null;syncPodiumWindow();try{w.focus()}catch(e){}return true}
 function closePodiumWindow(){if(PW.F)ambient(PW.F,false);if(PW.w){try{PW.w.close()}catch(e){}}PW.w=null;PW.grp=null}
 const podWinOpen=id=>!!(PW.w&&!PW.w.closed&&(id==null||PW.grp===id));
-function syncPodiumWindow(){const w=PW.w;if(!w)return;if(w.closed){closePodiumWindow();return}
+function syncPodiumWindow(){const w=PW.w;if(!w)return;if(w.closed){closePodiumWindow();return}try{w.document.documentElement.dataset.theme=THEME}catch(e){}
   let d;try{d=w.document}catch(e){PW.w=null;return}const root=d.getElementById('stageroot');if(!root)return;
   const grp=S.groups.find(b=>b.id===PW.grp);let html,st=null;
   if(!grp||grp.status!=='live')html=`<div class="stage big"><div class="st-lights"></div>${COURT}<header class="st-head"><div class="st-ev">${esc(S.name||'')}</div><h1 class="st-title">${esc(grp?grp.name:'Group removed')}</h1><p class="st-msg">The podium appears here once this group is live.</p></header><div></div></div>`;
@@ -1026,16 +1058,24 @@ function vCourtsModal(){if(!ui.courtsModal)return'';return`<div class="podmodal"
   ${ui.csFail?'<div class="st-warn" role="status">This browser blocked the new window, so the courts screen is shown here instead. To put it on another screen, allow pop-ups for this page in your browser and press Open in new window again, or press Full screen here.</div>':''}</div></div>`}
 /* Courts screen window: a separate browser window, drawn and kept live from this page */
 const CW={w:null,html:''};
+/* ---------- light / dark mode: shared with Open Play (localStorage 'dr_light_mode': '1' light, '0' dark) and applied to every preview ---------- */
+const THEME_KEY='dr_light_mode';
+let THEME='dark';try{THEME=document.documentElement.dataset.theme==='light'?'light':'dark'}catch(e){}
+function applyTheme(){try{document.documentElement.dataset.theme=THEME}catch(e){}
+  [PW.w,CW.w].forEach(w=>{try{if(w&&!w.closed)w.document.documentElement.dataset.theme=THEME}catch(e){}})}
+function setTheme(t){THEME=t==='light'?'light':'dark';try{localStorage.setItem(THEME_KEY,THEME==='light'?'1':'0')}catch(e){}applyTheme()}
+/* Open Play (or another Desk tab) switched mode: follow it */
+window.addEventListener('storage',e=>{if(e.key!==THEME_KEY)return;THEME=e.newValue==='1'?'light':'dark';applyTheme();render()});
 const csOpen=()=>!!(CW.w&&!CW.w.closed)||!!ui.courtsModal;
 function courtsDoc(){const css=[...document.querySelectorAll('style')].map(s=>s.outerHTML).join('');
-  return`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Courts</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Public+Sans:wght@400;500;600;700&display=swap">${css}<style>html,body{margin:0;padding:0;background:#06131f;min-height:100%}</style></head><body><div id="csroot"></div><div class="st-bar"><button class="st-btn" id="fsb">Full screen</button></div></body></html>`}
+  return`<!doctype html><html data-theme="${THEME}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Courts</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Public+Sans:wght@400;500;600;700&display=swap">${css}<style>html,body{margin:0;padding:0;background:#06131f;min-height:100%}html[data-theme=light],html[data-theme=light] body{background:#E8F0F8}</style></head><body><div id="csroot"></div><div class="st-bar"><button class="st-btn" id="fsb">Full screen</button></div></body></html>`}
 function openCourtsWindow(){let w=null;try{w=window.open('','drCourts','popup=yes,width=1280,height=760')}catch(e){w=null}if(!w)return false;
   try{const d=w.document;if(!d.getElementById('csroot')){d.open();d.write(courtsDoc());d.close()}
     const fb=d.getElementById('fsb');if(fb&&!fb.dataset.wired){fb.dataset.wired='1';fb.addEventListener('click',()=>{try{const p=d.fullscreenElement?d.exitFullscreen():d.documentElement.requestFullscreen();if(p&&p.catch)p.catch(()=>{})}catch(e){}})}
   }catch(e){try{w.close()}catch(x){}return false}
   CW.w=w;CW.html='';syncCourtsWindow();try{w.focus()}catch(e){}return true}
 function closeCourtsWindow(){if(CW.w){try{CW.w.close()}catch(e){}}CW.w=null}
-function syncCourtsWindow(){const w=CW.w;if(!w)return;if(w.closed){CW.w=null;return}let d;try{d=w.document}catch(e){CW.w=null;return}
+function syncCourtsWindow(){const w=CW.w;if(!w)return;if(w.closed){CW.w=null;return}try{w.document.documentElement.dataset.theme=THEME}catch(e){}let d;try{d=w.document}catch(e){CW.w=null;return}
   const root=d.getElementById('csroot');if(!root)return;const h=courtsScreen();if(h!==CW.html){root.innerHTML=h;CW.html=h;try{d.title=(S.name?S.name+' · ':'')+'Courts'}catch(e){}}}
 /* Tick every second: running timers and the clock, here and in the courts window */
 setInterval(()=>{const now=Date.now(),clk=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
@@ -1171,6 +1211,7 @@ document.addEventListener('click',e=>{const t=e.target.closest('[data-act]');if(
     case'chalto':{const n=grp.matches.length+1;grp.matches.push(mk('ld',n,0,P(t.dataset.a),P(t.dataset.b),`Challenge ${n}`));ui.challenge=null;break}
     case'chaldel':grp.matches=grp.matches.filter(m=>m.id!==t.dataset.m);break;
     case'savenow':cloudSave();return;
+    case'theme':setTheme(t.dataset.v);render();return;
     case'rkedit':{const R=resolve(grp);ui.rkEdit=grp.id+':'+t.dataset.k;ui.rkDraft=tableFor(grp,t.dataset.k,R).map(s=>s.id);render();return}
     case'rkup':case'rkdn':{const i=+t.dataset.i,j=act==='rkup'?i-1:i+1,d=ui.rkDraft;if(d&&d[j]!==undefined){[d[i],d[j]]=[d[j],d[i]]}render();return}
     case'rkcancel':ui.rkEdit=null;ui.rkDraft=null;render();return;
@@ -1225,6 +1266,17 @@ document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLower
   if(e.key==='Escape'&&ui.podium){ui.podium=null;render();return}
   if(e.key==='Escape'&&ui.backup){ui.backup=false;render()}
   if(e.key==='Enter'&&e.target.classList&&e.target.classList.contains('sc')){const all=[...document.querySelectorAll('.sc:not(:disabled)')];const i=all.indexOf(e.target);if(all[i+1])all[i+1].focus()}});
+
+/* ---------- instant tooltips for anything with data-tip (column headers, tie badges) ---------- */
+try{const TIP=document.createElement('div');TIP.className='tip';TIP.id='tip';TIP.setAttribute('role','tooltip');TIP.hidden=true;document.body.appendChild(TIP);
+  const show=el=>{const t=el.dataset.tip;if(!t)return;TIP.textContent=t;TIP.hidden=false;const r=el.getBoundingClientRect(),w=TIP.offsetWidth,h=TIP.offsetHeight;
+    let x=r.left+r.width/2-w/2;x=Math.max(8,Math.min(x,window.innerWidth-w-8));let y=r.bottom+8;if(y+h>window.innerHeight-8)y=r.top-h-8;TIP.style.left=x+'px';TIP.style.top=y+'px'};
+  const hide=()=>{TIP.hidden=true};const tipOf=t=>t&&t.closest?t.closest('[data-tip]'):null;
+  document.addEventListener('mouseover',e=>{const el=tipOf(e.target);if(el)show(el);else hide()});
+  document.addEventListener('mouseout',e=>{if(!e.relatedTarget)hide()});
+  document.addEventListener('focusin',e=>{const el=tipOf(e.target);if(el)show(el);else hide()});
+  document.addEventListener('focusout',hide);window.addEventListener('scroll',hide,true);
+}catch(e){}
 
 /* ---------- sample ---------- */
 function sample(){S={name:'Dink Republic Fall Classic',date:'2026-10-24',groups:[],sample:true};
